@@ -125,6 +125,9 @@ impl std::error::Error for XGtsRefValidationError {}
 #[derive(Debug, Clone, Copy, Default)]
 pub struct XGtsRefValidator;
 
+// These methods take &self for API consistency even though XGtsRefValidator is zero-sized.
+// This allows future extension with state if needed.
+#[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)]
 impl XGtsRefValidator {
     /// Create a new validator
     #[must_use]
@@ -160,11 +163,9 @@ impl XGtsRefValidator {
         path: &str,
         errors: &mut Vec<XGtsRefValidationError>,
     ) {
-        if !sch.is_object() {
+        let Some(sch_obj) = sch.as_object() else {
             return;
-        }
-
-        let sch_obj = sch.as_object().unwrap();
+        };
 
         // Check for x-gts-ref constraint
         if let Some(x_gts_ref) = sch_obj.get("x-gts-ref") {
@@ -245,11 +246,9 @@ impl XGtsRefValidator {
         root_schema: &Value,
         errors: &mut Vec<XGtsRefValidationError>,
     ) {
-        if !sch.is_object() {
+        let Some(sch_obj) = sch.as_object() else {
             return;
-        }
-
-        let sch_obj = sch.as_object().unwrap();
+        };
 
         // Check for x-gts-ref field
         if let Some(x_gts_ref) = sch_obj.get("x-gts-ref") {
@@ -516,6 +515,7 @@ impl XGtsRefValidator {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use serde_json::json;

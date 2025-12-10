@@ -27,18 +27,18 @@ impl JsonPathResolver {
         }
     }
 
-    fn normalize(&self, path: &str) -> String {
+    fn normalize(path: &str) -> String {
         path.replace('/', ".")
     }
 
-    fn split_raw_parts(&self, norm: &str) -> Vec<String> {
+    fn split_raw_parts(norm: &str) -> Vec<String> {
         norm.split('.')
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
+            .map(ToString::to_string)
             .collect()
     }
 
-    fn parse_part(&self, seg: &str) -> Vec<String> {
+    fn parse_part(seg: &str) -> Vec<String> {
         let mut out = Vec::new();
         let mut buf = String::new();
         let mut i = 0;
@@ -72,13 +72,13 @@ impl JsonPathResolver {
         out
     }
 
-    fn parts(&self, path: &str) -> Vec<String> {
-        let norm = self.normalize(path);
-        let raw = self.split_raw_parts(&norm);
+    fn parts(path: &str) -> Vec<String> {
+        let norm = Self::normalize(path);
+        let raw = Self::split_raw_parts(&norm);
         let mut parts = Vec::new();
 
         for seg in raw {
-            parts.extend(self.parse_part(&seg));
+            parts.extend(Self::parse_part(&seg));
         }
 
         parts
@@ -116,12 +116,13 @@ impl JsonPathResolver {
         }
     }
 
-    fn collect_from(&self, node: &Value) -> Vec<String> {
+    fn collect_from(node: &Value) -> Vec<String> {
         let mut acc = Vec::new();
         Self::list_available(node, "", &mut acc);
         acc
     }
 
+    #[must_use]
     pub fn resolve(mut self, path: &str) -> Self {
         self.path = path.to_string();
         self.value = None;
@@ -129,7 +130,7 @@ impl JsonPathResolver {
         self.error = None;
         self.available_fields = None;
 
-        let parts = self.parts(path);
+        let parts = Self::parts(path);
         let mut cur = self.content.clone();
 
         for p in parts {
@@ -137,30 +138,24 @@ impl JsonPathResolver {
                 Value::Array(arr) => {
                     let idx = if p.starts_with('[') && p.ends_with(']') {
                         let idx_str = &p[1..p.len() - 1];
-                        match idx_str.parse::<usize>() {
-                            Ok(i) => i,
-                            Err(_) => {
-                                self.error =
-                                    Some(format!("Expected list index at segment '{}'", p));
-                                self.available_fields = Some(self.collect_from(&cur));
-                                return self;
-                            }
+                        if let Ok(i) = idx_str.parse::<usize>() {
+                            i
+                        } else {
+                            self.error = Some(format!("Expected list index at segment '{}'", p));
+                            self.available_fields = Some(Self::collect_from(&cur));
+                            return self;
                         }
+                    } else if let Ok(i) = p.parse::<usize>() {
+                        i
                     } else {
-                        match p.parse::<usize>() {
-                            Ok(i) => i,
-                            Err(_) => {
-                                self.error =
-                                    Some(format!("Expected list index at segment '{}'", p));
-                                self.available_fields = Some(self.collect_from(&cur));
-                                return self;
-                            }
-                        }
+                        self.error = Some(format!("Expected list index at segment '{}'", p));
+                        self.available_fields = Some(Self::collect_from(&cur));
+                        return self;
                     };
 
                     if idx >= arr.len() {
                         self.error = Some(format!("Index out of range at segment '{}'", p));
-                        self.available_fields = Some(self.collect_from(&cur));
+                        self.available_fields = Some(Self::collect_from(&cur));
                         return self;
                     }
 
@@ -172,7 +167,7 @@ impl JsonPathResolver {
                             "Path not found at segment '{}' in '{}', see available fields",
                             p, path
                         ));
-                        self.available_fields = Some(self.collect_from(&cur));
+                        self.available_fields = Some(Self::collect_from(&cur));
                         return self;
                     }
 
@@ -183,14 +178,14 @@ impl JsonPathResolver {
                             "Path not found at segment '{}' in '{}', see available fields",
                             p, path
                         ));
-                        self.available_fields = Some(self.collect_from(&cur));
+                        self.available_fields = Some(Self::collect_from(&cur));
                         return self;
                     }
                 }
                 _ => {
                     self.error = Some(format!("Cannot descend into {:?} at segment '{}'", cur, p));
                     self.available_fields = if cur.is_object() || cur.is_array() {
-                        Some(self.collect_from(&cur))
+                        Some(Self::collect_from(&cur))
                     } else {
                         Some(Vec::new())
                     };
@@ -204,6 +199,7 @@ impl JsonPathResolver {
         self
     }
 
+    #[must_use]
     pub fn failure(mut self, path: &str, error: &str) -> Self {
         self.path = path.to_string();
         self.value = None;
@@ -215,6 +211,7 @@ impl JsonPathResolver {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use serde_json::json;

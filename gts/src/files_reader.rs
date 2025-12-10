@@ -17,7 +17,7 @@ pub struct GtsFileReader {
 }
 
 impl GtsFileReader {
-    pub fn new(path: Vec<String>, cfg: Option<GtsConfig>) -> Self {
+    pub fn new(path: &[String], cfg: Option<GtsConfig>) -> Self {
         let paths = path
             .iter()
             .map(|p| PathBuf::from(shellexpand::tilde(p).to_string()))
@@ -91,14 +91,14 @@ impl GtsFileReader {
         self.files = collected;
     }
 
-    fn load_json_file(&self, file_path: &Path) -> Result<Value, Box<dyn std::error::Error>> {
+    fn load_json_file(file_path: &Path) -> Result<Value, Box<dyn std::error::Error>> {
         let content = fs::read_to_string(file_path)?;
 
         // Determine file type by extension
         let extension = file_path
             .extension()
             .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase())
+            .map(str::to_lowercase)
             .unwrap_or_default();
 
         let value: Value = match extension.as_str() {
@@ -119,7 +119,7 @@ impl GtsFileReader {
     fn process_file(&self, file_path: &Path) -> Vec<GtsEntity> {
         let mut entities = Vec::new();
 
-        match self.load_json_file(file_path) {
+        match Self::load_json_file(file_path) {
             Ok(content) => {
                 let json_file = GtsFile::new(
                     file_path.to_string_lossy().to_string(),
@@ -137,7 +137,7 @@ impl GtsFileReader {
                         let entity = GtsEntity::new(
                             Some(json_file.clone()),
                             Some(idx),
-                            item.clone(),
+                            item,
                             Some(&self.cfg),
                             None,
                             false,
@@ -145,11 +145,8 @@ impl GtsFileReader {
                             None,
                             None,
                         );
-                        if entity.gts_id.is_some() {
-                            tracing::debug!(
-                                "- discovered entity: {}",
-                                entity.gts_id.as_ref().unwrap().id
-                            );
+                        if let Some(ref gts_id) = entity.gts_id {
+                            tracing::debug!("- discovered entity: {}", gts_id.id);
                             entities.push(entity);
                         } else {
                             tracing::debug!(
@@ -162,7 +159,7 @@ impl GtsFileReader {
                     let entity = GtsEntity::new(
                         Some(json_file),
                         None,
-                        content.clone(),
+                        &content,
                         Some(&self.cfg),
                         None,
                         false,
@@ -170,11 +167,8 @@ impl GtsFileReader {
                         None,
                         None,
                     );
-                    if entity.gts_id.is_some() {
-                        tracing::debug!(
-                            "- discovered entity: {}",
-                            entity.gts_id.as_ref().unwrap().id
-                        );
+                    if let Some(ref gts_id) = entity.gts_id {
+                        tracing::debug!("- discovered entity: {}", gts_id.id);
                         entities.push(entity);
                     } else {
                         tracing::debug!(

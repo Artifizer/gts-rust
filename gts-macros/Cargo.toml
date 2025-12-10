@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "Procedural macros for GTS schema generation"
 
+[lints]
+workspace = true
+
 [lib]
 proc-macro = true
 test = false

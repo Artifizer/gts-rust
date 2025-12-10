@@ -78,6 +78,7 @@ impl GtsIdSegment {
         Ok(seg)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn parse_segment_id(&mut self, segment: &str) -> Result<(), GtsError> {
         let mut segment = segment.to_string();
 
@@ -270,7 +271,7 @@ impl GtsID {
         if !raw.starts_with(GTS_PREFIX) {
             return Err(GtsError::InvalidId {
                 id: id.to_string(),
-                cause: format!("Does not start with '{}'", GTS_PREFIX),
+                cause: format!("Does not start with '{GTS_PREFIX}'"),
             });
         }
 
@@ -285,17 +286,17 @@ impl GtsID {
         let remainder = &raw[GTS_PREFIX.len()..];
 
         // Split by ~ preserving empties to detect trailing ~
-        let _parts: Vec<&str> = remainder.split('~').collect();
+        let tilde_parts: Vec<&str> = remainder.split('~').collect();
         let mut parts = Vec::new();
 
-        for i in 0.._parts.len() {
-            if i < _parts.len() - 1 {
-                parts.push(format!("{}~", _parts[i]));
-                if i == _parts.len() - 2 && _parts[i + 1].is_empty() {
+        for i in 0..tilde_parts.len() {
+            if i < tilde_parts.len() - 1 {
+                parts.push(format!("{}~", tilde_parts[i]));
+                if i == tilde_parts.len() - 2 && tilde_parts[i + 1].is_empty() {
                     break;
                 }
             } else {
-                parts.push(_parts[i].to_string());
+                parts.push(tilde_parts[i].to_string());
             }
         }
 
@@ -304,7 +305,7 @@ impl GtsID {
             if part.is_empty() || part == "~" {
                 return Err(GtsError::InvalidId {
                     id: id.to_string(),
-                    cause: format!("GTS segment #{} @ offset {} is empty", i + 1, offset),
+                    cause: format!("GTS segment #{} @ offset {offset} is empty", i + 1),
                 });
             }
 
@@ -331,7 +332,7 @@ impl GtsID {
             .map(|s| s.segment.as_str())
             .collect::<Vec<_>>()
             .join("");
-        Some(format!("{}{}", GTS_PREFIX, segments))
+        Some(format!("{GTS_PREFIX}{segments}"))
     }
 
     /// Generate a deterministic UUID v5 from this GTS ID.
@@ -356,7 +357,7 @@ impl GtsID {
 
         // No wildcard case - need exact match with version flexibility
         if !p.contains('*') {
-            return self.match_segments(&pattern.gts_id_segments, &self.gts_id_segments);
+            return Self::match_segments(&pattern.gts_id_segments, &self.gts_id_segments);
         }
 
         // Wildcard case
@@ -364,14 +365,10 @@ impl GtsID {
             return false;
         }
 
-        self.match_segments(&pattern.gts_id_segments, &self.gts_id_segments)
+        Self::match_segments(&pattern.gts_id_segments, &self.gts_id_segments)
     }
 
-    fn match_segments(
-        &self,
-        pattern_segs: &[GtsIdSegment],
-        candidate_segs: &[GtsIdSegment],
-    ) -> bool {
+    fn match_segments(pattern_segs: &[GtsIdSegment], candidate_segs: &[GtsIdSegment]) -> bool {
         // If pattern is longer than candidate, no match
         if pattern_segs.len() > candidate_segs.len() {
             return false;
@@ -451,7 +448,7 @@ impl GtsID {
 
         let parts: Vec<&str> = gts_with_path.splitn(2, '@').collect();
         let gts = parts[0].to_string();
-        let path = parts.get(1).map(|s| s.to_string());
+        let path = parts.get(1).map(|s| (*s).to_string());
 
         if let Some(ref p) = path {
             if p.is_empty() {
@@ -500,7 +497,7 @@ impl GtsWildcard {
         if !p.starts_with(GTS_PREFIX) {
             return Err(GtsError::InvalidWildcard {
                 pattern: pattern.to_string(),
-                cause: format!("Does not start with '{}'", GTS_PREFIX),
+                cause: format!("Does not start with '{GTS_PREFIX}'"),
             });
         }
 
@@ -553,12 +550,13 @@ impl AsRef<str> for GtsWildcard {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_gts_id_valid() {
-        let id = GtsID::new("gts.x.core.events.event.v1~").unwrap();
+        let id = GtsID::new("gts.x.core.events.event.v1~").expect("test");
         assert_eq!(id.id, "gts.x.core.events.event.v1~");
         assert!(id.is_type());
         assert_eq!(id.gts_id_segments.len(), 1);
@@ -566,7 +564,7 @@ mod tests {
 
     #[test]
     fn test_gts_id_with_minor_version() {
-        let id = GtsID::new("gts.x.core.events.event.v1.2~").unwrap();
+        let id = GtsID::new("gts.x.core.events.event.v1.2~").expect("test");
         assert_eq!(id.id, "gts.x.core.events.event.v1.2~");
         assert!(id.is_type());
         let seg = &id.gts_id_segments[0];
@@ -580,7 +578,7 @@ mod tests {
 
     #[test]
     fn test_gts_id_instance() {
-        let id = GtsID::new("gts.x.core.events.event.v1.0").unwrap();
+        let id = GtsID::new("gts.x.core.events.event.v1.0").expect("test");
         assert_eq!(id.id, "gts.x.core.events.event.v1.0");
         assert!(!id.is_type());
     }
@@ -605,29 +603,29 @@ mod tests {
 
     #[test]
     fn test_gts_wildcard_simple() {
-        let pattern = GtsWildcard::new("gts.x.core.events.*").unwrap();
-        let id = GtsID::new("gts.x.core.events.event.v1~").unwrap();
+        let pattern = GtsWildcard::new("gts.x.core.events.*").expect("test");
+        let id = GtsID::new("gts.x.core.events.event.v1~").expect("test");
         assert!(id.wildcard_match(&pattern));
     }
 
     #[test]
     fn test_gts_wildcard_no_match() {
-        let pattern = GtsWildcard::new("gts.x.core.events.*").unwrap();
-        let id = GtsID::new("gts.y.core.events.event.v1~").unwrap();
+        let pattern = GtsWildcard::new("gts.x.core.events.*").expect("test");
+        let id = GtsID::new("gts.y.core.events.event.v1~").expect("test");
         assert!(!id.wildcard_match(&pattern));
     }
 
     #[test]
     fn test_gts_wildcard_type_suffix() {
         // Wildcard after ~ should match type IDs
-        let pattern = GtsWildcard::new("gts.x.core.events.*").unwrap();
-        let id = GtsID::new("gts.x.core.events.event.v1~").unwrap();
+        let pattern = GtsWildcard::new("gts.x.core.events.*").expect("test");
+        let id = GtsID::new("gts.x.core.events.event.v1~").expect("test");
         assert!(id.wildcard_match(&pattern));
     }
 
     #[test]
     fn test_uuid_generation() {
-        let id = GtsID::new("gts.x.core.events.event.v1~").unwrap();
+        let id = GtsID::new("gts.x.core.events.event.v1~").expect("test");
         let uuid1 = id.to_uuid();
         let uuid2 = id.to_uuid();
         // UUIDs should be deterministic
@@ -637,36 +635,37 @@ mod tests {
 
     #[test]
     fn test_uuid_different_ids() {
-        let id1 = GtsID::new("gts.x.core.events.event.v1~").unwrap();
-        let id2 = GtsID::new("gts.x.core.events.event.v2~").unwrap();
+        let id1 = GtsID::new("gts.x.core.events.event.v1~").expect("test");
+        let id2 = GtsID::new("gts.x.core.events.event.v2~").expect("test");
         assert_ne!(id1.to_uuid(), id2.to_uuid());
     }
 
     #[test]
     fn test_get_type_id() {
         // get_type_id is for chained IDs - returns None for single segment
-        let id = GtsID::new("gts.x.core.events.event.v1~").unwrap();
+        let id = GtsID::new("gts.x.core.events.event.v1~").expect("test");
         let type_id = id.get_type_id();
         assert!(type_id.is_none());
 
         // For chained IDs, it returns the base type
-        let chained = GtsID::new("gts.x.core.events.type.v1~vendor.app._.custom.v1~").unwrap();
+        let chained =
+            GtsID::new("gts.x.core.events.type.v1~vendor.app._.custom.v1~").expect("test");
         let base_type = chained.get_type_id();
         assert!(base_type.is_some());
-        assert_eq!(base_type.unwrap(), "gts.x.core.events.type.v1~");
+        assert_eq!(base_type.expect("test"), "gts.x.core.events.type.v1~");
     }
 
     #[test]
     fn test_split_at_path() {
         let (gts, path) =
-            GtsID::split_at_path("gts.x.core.events.event.v1~@field.subfield").unwrap();
+            GtsID::split_at_path("gts.x.core.events.event.v1~@field.subfield").expect("test");
         assert_eq!(gts, "gts.x.core.events.event.v1~");
         assert_eq!(path, Some("field.subfield".to_string()));
     }
 
     #[test]
     fn test_split_at_path_no_path() {
-        let (gts, path) = GtsID::split_at_path("gts.x.core.events.event.v1~").unwrap();
+        let (gts, path) = GtsID::split_at_path("gts.x.core.events.event.v1~").expect("test");
         assert_eq!(gts, "gts.x.core.events.event.v1~");
         assert_eq!(path, None);
     }
@@ -687,9 +686,9 @@ mod tests {
     #[test]
     fn test_version_flexibility_in_matching() {
         // Pattern without minor version should match any minor version
-        let pattern = GtsWildcard::new("gts.x.core.events.event.v1~").unwrap();
-        let id_no_minor = GtsID::new("gts.x.core.events.event.v1~").unwrap();
-        let id_with_minor = GtsID::new("gts.x.core.events.event.v1.0~").unwrap();
+        let pattern = GtsWildcard::new("gts.x.core.events.event.v1~").expect("test");
+        let id_no_minor = GtsID::new("gts.x.core.events.event.v1~").expect("test");
+        let id_with_minor = GtsID::new("gts.x.core.events.event.v1.0~").expect("test");
 
         assert!(id_no_minor.wildcard_match(&pattern));
         assert!(id_with_minor.wildcard_match(&pattern));
@@ -697,7 +696,8 @@ mod tests {
 
     #[test]
     fn test_chained_identifiers() {
-        let id = GtsID::new("gts.x.core.events.type.v1~vendor.app._.custom_event.v1~").unwrap();
+        let id =
+            GtsID::new("gts.x.core.events.type.v1~vendor.app._.custom_event.v1~").expect("test");
         assert_eq!(id.gts_id_segments.len(), 2);
         assert_eq!(id.gts_id_segments[0].vendor, "x");
         assert_eq!(id.gts_id_segments[1].vendor, "vendor");
@@ -717,28 +717,28 @@ mod tests {
     #[test]
     fn test_gts_id_with_underscore() {
         // Underscores are allowed in namespace
-        let id = GtsID::new("gts.x.core._.event.v1~").unwrap();
+        let id = GtsID::new("gts.x.core._.event.v1~").expect("test");
         assert_eq!(id.gts_id_segments[0].namespace, "_");
     }
 
     #[test]
     fn test_gts_wildcard_exact_match() {
-        let pattern = GtsWildcard::new("gts.x.core.events.event.v1~").unwrap();
-        let id = GtsID::new("gts.x.core.events.event.v1~").unwrap();
+        let pattern = GtsWildcard::new("gts.x.core.events.event.v1~").expect("test");
+        let id = GtsID::new("gts.x.core.events.event.v1~").expect("test");
         assert!(id.wildcard_match(&pattern));
     }
 
     #[test]
     fn test_gts_wildcard_version_mismatch() {
-        let pattern = GtsWildcard::new("gts.x.core.events.event.v2~").unwrap();
-        let id = GtsID::new("gts.x.core.events.event.v1~").unwrap();
+        let pattern = GtsWildcard::new("gts.x.core.events.event.v2~").expect("test");
+        let id = GtsID::new("gts.x.core.events.event.v1~").expect("test");
         assert!(!id.wildcard_match(&pattern));
     }
 
     #[test]
     fn test_gts_wildcard_with_minor_version() {
-        let pattern = GtsWildcard::new("gts.x.core.events.event.v1.0~").unwrap();
-        let id = GtsID::new("gts.x.core.events.event.v1.0~").unwrap();
+        let pattern = GtsWildcard::new("gts.x.core.events.event.v1.0~").expect("test");
+        let id = GtsID::new("gts.x.core.events.event.v1.0~").expect("test");
         assert!(id.wildcard_match(&pattern));
     }
 
@@ -776,33 +776,33 @@ mod tests {
     fn test_split_at_path_multiple_at_signs() {
         // Should only split at first @
         let (gts, path) =
-            GtsID::split_at_path("gts.x.core.events.event.v1~@field@subfield").unwrap();
+            GtsID::split_at_path("gts.x.core.events.event.v1~@field@subfield").expect("test");
         assert_eq!(gts, "gts.x.core.events.event.v1~");
         assert_eq!(path, Some("field@subfield".to_string()));
     }
 
     #[test]
     fn test_gts_wildcard_instance_match() {
-        let pattern = GtsWildcard::new("gts.x.core.events.*").unwrap();
-        let id = GtsID::new("gts.x.core.events.event.v1.0").unwrap();
+        let pattern = GtsWildcard::new("gts.x.core.events.*").expect("test");
+        let id = GtsID::new("gts.x.core.events.event.v1.0").expect("test");
         assert!(id.wildcard_match(&pattern));
     }
 
     #[test]
     fn test_gts_id_whitespace_trimming() {
-        let id = GtsID::new("  gts.x.core.events.event.v1~  ").unwrap();
+        let id = GtsID::new("  gts.x.core.events.event.v1~  ").expect("test");
         assert_eq!(id.id, "gts.x.core.events.event.v1~");
     }
 
     #[test]
     fn test_gts_wildcard_whitespace_trimming() {
-        let pattern = GtsWildcard::new("  gts.x.core.events.*  ").unwrap();
+        let pattern = GtsWildcard::new("  gts.x.core.events.*  ").expect("test");
         assert_eq!(pattern.id, "gts.x.core.events.*");
     }
 
     #[test]
     fn test_gts_id_long_chain() {
-        let id = GtsID::new("gts.a.b.c.d.v1~e.f.g.h.v2~i.j.k.l.v3~").unwrap();
+        let id = GtsID::new("gts.a.b.c.d.v1~e.f.g.h.v2~i.j.k.l.v3~").expect("test");
         assert_eq!(id.gts_id_segments.len(), 3);
     }
 
@@ -813,29 +813,29 @@ mod tests {
         assert!(result1.is_err());
 
         // Wildcard at end should work
-        let pattern2 = GtsWildcard::new("gts.x.core.events.*").unwrap();
-        let id2 = GtsID::new("gts.x.core.events.event.v1~").unwrap();
+        let pattern2 = GtsWildcard::new("gts.x.core.events.*").expect("test");
+        let id2 = GtsID::new("gts.x.core.events.event.v1~").expect("test");
         assert!(id2.wildcard_match(&pattern2));
     }
 
     #[test]
     fn test_gts_id_version_without_minor() {
-        let id = GtsID::new("gts.x.core.events.event.v1~").unwrap();
+        let id = GtsID::new("gts.x.core.events.event.v1~").expect("test");
         assert_eq!(id.gts_id_segments[0].ver_major, 1);
         assert_eq!(id.gts_id_segments[0].ver_minor, None);
     }
 
     #[test]
     fn test_gts_id_version_with_large_numbers() {
-        let id = GtsID::new("gts.x.core.events.event.v99.999~").unwrap();
+        let id = GtsID::new("gts.x.core.events.event.v99.999~").expect("test");
         assert_eq!(id.gts_id_segments[0].ver_major, 99);
         assert_eq!(id.gts_id_segments[0].ver_minor, Some(999));
     }
 
     #[test]
     fn test_gts_wildcard_no_wildcard_different_vendor() {
-        let pattern = GtsWildcard::new("gts.x.core.events.event.v1~").unwrap();
-        let id = GtsID::new("gts.y.core.events.event.v1~").unwrap();
+        let pattern = GtsWildcard::new("gts.x.core.events.event.v1~").expect("test");
+        let id = GtsID::new("gts.y.core.events.event.v1~").expect("test");
         assert!(!id.wildcard_match(&pattern));
     }
 
@@ -848,45 +848,45 @@ mod tests {
     #[test]
     fn test_split_at_path_with_hash() {
         // Hash is not a separator, should be part of the ID
-        let (gts, path) = GtsID::split_at_path("gts.x.core.events.event.v1~#field").unwrap();
+        let (gts, path) = GtsID::split_at_path("gts.x.core.events.event.v1~#field").expect("test");
         assert_eq!(gts, "gts.x.core.events.event.v1~#field");
         assert_eq!(path, None);
     }
 
     #[test]
     fn test_gts_id_display_trait() {
-        let id = GtsID::new("gts.x.core.events.event.v1~").unwrap();
+        let id = GtsID::new("gts.x.core.events.event.v1~").expect("test");
         assert_eq!(format!("{}", id), "gts.x.core.events.event.v1~");
     }
 
     #[test]
     fn test_gts_id_from_str_trait() {
-        let id: GtsID = "gts.x.core.events.event.v1~".parse().unwrap();
+        let id: GtsID = "gts.x.core.events.event.v1~".parse().expect("test");
         assert_eq!(id.id, "gts.x.core.events.event.v1~");
     }
 
     #[test]
     fn test_gts_id_as_ref_trait() {
-        let id = GtsID::new("gts.x.core.events.event.v1~").unwrap();
+        let id = GtsID::new("gts.x.core.events.event.v1~").expect("test");
         let s: &str = id.as_ref();
         assert_eq!(s, "gts.x.core.events.event.v1~");
     }
 
     #[test]
     fn test_gts_wildcard_display_trait() {
-        let pattern = GtsWildcard::new("gts.x.core.events.*").unwrap();
+        let pattern = GtsWildcard::new("gts.x.core.events.*").expect("test");
         assert_eq!(format!("{}", pattern), "gts.x.core.events.*");
     }
 
     #[test]
     fn test_gts_wildcard_from_str_trait() {
-        let pattern: GtsWildcard = "gts.x.core.events.*".parse().unwrap();
+        let pattern: GtsWildcard = "gts.x.core.events.*".parse().expect("test");
         assert_eq!(pattern.id, "gts.x.core.events.*");
     }
 
     #[test]
     fn test_gts_wildcard_as_ref_trait() {
-        let pattern = GtsWildcard::new("gts.x.core.events.*").unwrap();
+        let pattern = GtsWildcard::new("gts.x.core.events.*").expect("test");
         let s: &str = pattern.as_ref();
         assert_eq!(s, "gts.x.core.events.*");
     }

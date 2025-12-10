@@ -194,7 +194,7 @@ async fn add_entity(
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
     let mut ops = state.ops.lock().unwrap();
-    let result = ops.add_entity(body, params.validate);
+    let result = ops.add_entity(&body, params.validate);
     Json(result)
 }
 
@@ -203,7 +203,7 @@ async fn add_entities(
     Json(body): Json<Vec<Value>>,
 ) -> impl IntoResponse {
     let mut ops = state.ops.lock().unwrap();
-    let result = ops.add_entities(body);
+    let result = ops.add_entities(&body);
     Json(result)
 }
 
@@ -212,7 +212,7 @@ async fn add_schema(
     Json(body): Json<SchemaRegister>,
 ) -> impl IntoResponse {
     let mut ops = state.ops.lock().unwrap();
-    let result = ops.add_schema(body.type_id, body.schema_content);
+    let result = ops.add_schema(body.type_id, &body.schema_content);
     Json(result)
 }
 
@@ -227,7 +227,7 @@ async fn validate_id(
 
 async fn extract_id(State(state): State<AppState>, Json(body): Json<Value>) -> impl IntoResponse {
     let ops = state.ops.lock().unwrap();
-    let result = ops.extract_id(body);
+    let result = ops.extract_id(&body);
     Json(result)
 }
 

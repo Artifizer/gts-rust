@@ -120,7 +120,7 @@ impl GtsEntity {
     pub fn new(
         file: Option<GtsFile>,
         list_sequence: Option<usize>,
-        content: Value,
+        content: &Value,
         cfg: Option<&GtsConfig>,
         gts_id: Option<GtsID>,
         is_schema: bool,
@@ -156,7 +156,8 @@ impl GtsEntity {
 
             // If no valid GTS ID found in entity fields, use schema ID as fallback
             let mut final_id = idv;
-            if final_id.is_none() || !GtsID::is_valid(final_id.as_ref().unwrap()) {
+            let is_valid_id = final_id.as_ref().is_some_and(|id| GtsID::is_valid(id));
+            if !is_valid_id {
                 if let Some(ref sid) = entity.schema_id {
                     if GtsID::is_valid(sid) {
                         final_id = Some(sid.clone());
@@ -169,8 +170,8 @@ impl GtsEntity {
 
         // Set label
         if let Some(ref file) = entity.file {
-            if entity.list_sequence.is_some() {
-                entity.label = format!("{}#{}", file.name, entity.list_sequence.unwrap());
+            if let Some(seq) = entity.list_sequence {
+                entity.label = format!("{}#{seq}", file.name);
             } else {
                 entity.label = file.name.clone();
             }
@@ -285,7 +286,7 @@ impl GtsEntity {
         )
     }
 
-    fn walk_and_collect<F>(&self, content: &Value, collector: &mut Vec<GtsRef>, matcher: F)
+    fn walk_and_collect<F>(content: &Value, collector: &mut Vec<GtsRef>, matcher: F)
     where
         F: Fn(&Value, &str) -> Option<GtsRef> + Copy,
     {
@@ -323,7 +324,7 @@ impl GtsEntity {
         walk(content, "", collector, matcher);
     }
 
-    fn deduplicate_by_id_and_path(&self, items: Vec<GtsRef>) -> Vec<GtsRef> {
+    fn deduplicate_by_id_and_path(items: Vec<GtsRef>) -> Vec<GtsRef> {
         let mut seen = HashMap::new();
         let mut result = Vec::new();
 
@@ -357,8 +358,8 @@ impl GtsEntity {
             None
         };
 
-        self.walk_and_collect(&self.content, &mut found, gts_id_matcher);
-        self.deduplicate_by_id_and_path(found)
+        Self::walk_and_collect(&self.content, &mut found, gts_id_matcher);
+        Self::deduplicate_by_id_and_path(found)
     }
 
     fn extract_ref_strings_with_paths(&self) -> Vec<GtsRef> {
@@ -383,8 +384,8 @@ impl GtsEntity {
             None
         };
 
-        self.walk_and_collect(&self.content, &mut refs, ref_matcher);
-        self.deduplicate_by_id_and_path(refs)
+        Self::walk_and_collect(&self.content, &mut refs, ref_matcher);
+        Self::deduplicate_by_id_and_path(refs)
     }
 
     fn get_field_value(&self, field: &str) -> Option<String> {
@@ -474,6 +475,7 @@ impl GtsEntity {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -489,7 +491,7 @@ mod tests {
         let entity = GtsEntity::new(
             None,
             None,
-            content,
+            &content,
             Some(&cfg),
             None,
             false,
@@ -520,7 +522,7 @@ mod tests {
         let entity = GtsEntity::new(
             Some(file),
             Some(0),
-            entity_content,
+            &entity_content,
             Some(&cfg),
             None,
             false,
@@ -548,7 +550,7 @@ mod tests {
         let entity = GtsEntity::new(
             Some(file),
             None,
-            entity_content,
+            &entity_content,
             Some(&cfg),
             None,
             false,
@@ -573,7 +575,7 @@ mod tests {
         let entity = GtsEntity::new(
             None,
             None,
-            content,
+            &content,
             Some(&cfg),
             None,
             false,
@@ -601,7 +603,7 @@ mod tests {
         let entity = GtsEntity::new(
             None,
             None,
-            content,
+            &content,
             Some(&cfg),
             None,
             true, // Mark as schema so schema_refs gets populated
@@ -624,7 +626,7 @@ mod tests {
         let entity = GtsEntity::new(
             None,
             None,
-            schema_content,
+            &schema_content,
             None,
             None,
             false,
@@ -647,7 +649,7 @@ mod tests {
         let entity = GtsEntity::new(
             None,
             None,
-            content,
+            &content,
             Some(&cfg),
             None,
             false,
@@ -667,7 +669,7 @@ mod tests {
         let entity = GtsEntity::new(
             None,
             None,
-            content,
+            &content,
             None,
             None,
             false,
@@ -686,7 +688,7 @@ mod tests {
         let entity = GtsEntity::new(
             None,
             None,
-            content,
+            &content,
             None,
             None,
             false,
@@ -756,7 +758,7 @@ mod tests {
         let entity = GtsEntity::new(
             None,
             None,
-            content,
+            &content,
             None,
             None,
             false,
@@ -779,7 +781,7 @@ mod tests {
         let entity = GtsEntity::new(
             None,
             None,
-            content,
+            &content,
             Some(&cfg),
             None,
             false,
@@ -802,7 +804,7 @@ mod tests {
         let entity = GtsEntity::new(
             None,
             None,
-            content,
+            &content,
             Some(&cfg),
             None,
             false,

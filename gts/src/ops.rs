@@ -163,8 +163,7 @@ impl GtsOps {
     pub fn new(path: Option<Vec<String>>, config: Option<String>, verbose: usize) -> Self {
         let cfg = Self::load_config(config);
         let reader: Option<Box<dyn crate::store::GtsReader>> = path.as_ref().map(|p| {
-            Box::new(GtsFileReader::new(p.clone(), Some(cfg.clone())))
-                as Box<dyn crate::store::GtsReader>
+            Box::new(GtsFileReader::new(p, Some(cfg.clone()))) as Box<dyn crate::store::GtsReader>
         });
         let store = GtsStore::new(reader);
 
@@ -208,7 +207,7 @@ impl GtsOps {
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter_map(|v| v.as_str().map(ToString::to_string))
                     .collect()
             })
             .unwrap_or(default_cfg.entity_id_fields);
@@ -218,7 +217,7 @@ impl GtsOps {
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter_map(|v| v.as_str().map(ToString::to_string))
                     .collect()
             })
             .unwrap_or(default_cfg.schema_id_fields);
@@ -229,14 +228,14 @@ impl GtsOps {
         }
     }
 
-    pub fn reload_from_path(&mut self, path: Vec<String>) {
-        self.path = Some(path.clone());
+    pub fn reload_from_path(&mut self, path: &[String]) {
+        self.path = Some(path.to_vec());
         let reader = Box::new(GtsFileReader::new(path, Some(self.cfg.clone())))
             as Box<dyn crate::store::GtsReader>;
         self.store = GtsStore::new(Some(reader));
     }
 
-    pub fn add_entity(&mut self, content: Value, validate: bool) -> GtsAddEntityResult {
+    pub fn add_entity(&mut self, content: &Value, validate: bool) -> GtsAddEntityResult {
         let entity = GtsEntity::new(
             None,
             None,
@@ -249,7 +248,7 @@ impl GtsOps {
             None,
         );
 
-        if entity.gts_id.is_none() {
+        let Some(ref gts_id) = entity.gts_id else {
             return GtsAddEntityResult {
                 ok: false,
                 id: String::new(),
@@ -257,7 +256,8 @@ impl GtsOps {
                 is_schema: false,
                 error: "Unable to detect GTS ID in entity".to_string(),
             };
-        }
+        };
+        let entity_id = gts_id.id.clone();
 
         // Register the entity first
         if let Err(e) = self.store.register(entity.clone()) {
@@ -269,8 +269,6 @@ impl GtsOps {
                 error: e.to_string(),
             };
         }
-
-        let entity_id = entity.gts_id.as_ref().unwrap().id.clone();
 
         // Always validate schemas
         if entity.is_schema {
@@ -307,18 +305,16 @@ impl GtsOps {
         }
     }
 
-    pub fn add_entities(&mut self, items: Vec<Value>) -> GtsAddEntitiesResult {
-        let results: Vec<GtsAddEntityResult> = items
-            .into_iter()
-            .map(|it| self.add_entity(it, false))
-            .collect();
+    pub fn add_entities(&mut self, items: &[Value]) -> GtsAddEntitiesResult {
+        let results: Vec<GtsAddEntityResult> =
+            items.iter().map(|it| self.add_entity(it, false)).collect();
         let ok = results.iter().all(|r| r.ok);
         GtsAddEntitiesResult { ok, results }
     }
 
-    pub fn add_schema(&mut self, type_id: String, schema: Value) -> GtsAddSchemaResult {
+    pub fn add_schema(&mut self, type_id: String, schema: &Value) -> GtsAddSchemaResult {
         match self.store.register_schema(&type_id, schema) {
-            Ok(_) => GtsAddSchemaResult {
+            Ok(()) => GtsAddSchemaResult {
                 ok: true,
                 id: type_id,
                 error: String::new(),
@@ -392,16 +388,21 @@ impl GtsOps {
     }
 
     pub fn uuid(&self, gts_id: &str) -> GtsUuidResult {
-        let g = GtsID::new(gts_id).unwrap();
-        GtsUuidResult {
-            id: g.id.clone(),
-            uuid: g.to_uuid().to_string(),
+        match GtsID::new(gts_id) {
+            Ok(g) => GtsUuidResult {
+                id: g.id.clone(),
+                uuid: g.to_uuid().to_string(),
+            },
+            Err(_) => GtsUuidResult {
+                id: gts_id.to_string(),
+                uuid: String::new(),
+            },
         }
     }
 
     pub fn validate_instance(&mut self, gts_id: &str) -> GtsValidationResult {
         match self.store.validate_instance(gts_id) {
-            Ok(_) => GtsValidationResult {
+            Ok(()) => GtsValidationResult {
                 id: gts_id.to_string(),
                 ok: true,
                 error: String::new(),
@@ -416,7 +417,7 @@ impl GtsOps {
 
     pub fn validate_schema(&mut self, gts_id: &str) -> GtsValidationResult {
         match self.store.validate_schema(gts_id) {
-            Ok(_) => GtsValidationResult {
+            Ok(()) => GtsValidationResult {
                 id: gts_id.to_string(),
                 ok: true,
                 error: String::new(),
@@ -494,7 +495,7 @@ impl GtsOps {
         }
     }
 
-    pub fn extract_id(&self, content: Value) -> GtsExtractIdResult {
+    pub fn extract_id(&self, content: &Value) -> GtsExtractIdResult {
         let entity = GtsEntity::new(
             None,
             None,
@@ -527,8 +528,7 @@ impl GtsOps {
                 id: entity
                     .gts_id
                     .as_ref()
-                    .map(|g| g.id.clone())
-                    .unwrap_or_else(|| gts_id.to_string()),
+                    .map_or_else(|| gts_id.to_string(), |g| g.id.clone()),
                 schema_id: entity.schema_id.clone(),
                 is_schema: entity.is_schema,
                 content: Some(entity.content.clone()),
@@ -573,6 +573,7 @@ impl GtsOps {
     }
 }
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::gts::GtsID;
@@ -625,7 +626,7 @@ mod tests {
             "name": "test"
         });
 
-        let result = ops.extract_id(content);
+        let result = ops.extract_id(&content);
         assert_eq!(result.id, "gts.vendor.package.namespace.type.v1.0");
     }
 
@@ -637,7 +638,7 @@ mod tests {
             "type": "gts.vendor.package.namespace.type.v1.0~"
         });
 
-        let result = ops.extract_id(content);
+        let result = ops.extract_id(&content);
         assert_eq!(
             result.schema_id,
             Some("gts.vendor.package.namespace.type.v1.0~".to_string())
@@ -675,7 +676,7 @@ mod tests {
             },
             "required": ["id"]
         });
-        ops.add_schema("gts.test.base.v1.0~".to_string(), base_schema);
+        ops.add_schema("gts.test.base.v1.0~".to_string(), &base_schema);
 
         // Register a derived schema
         let derived_schema = json!({
@@ -689,7 +690,7 @@ mod tests {
             },
             "required": ["id"]
         });
-        ops.add_schema("gts.test.derived.v1.1~".to_string(), derived_schema);
+        ops.add_schema("gts.test.derived.v1.1~".to_string(), &derived_schema);
 
         // Register an instance
         let instance = json!({
@@ -697,7 +698,7 @@ mod tests {
             "type": "gts.test.base.v1.0~",
             "name": "Test Instance"
         });
-        ops.add_entity(instance, false);
+        ops.add_entity(&instance, false);
 
         // Test casting
         let result = ops.cast("gts.test.base.v1.0~instance.v1.0", "gts.test.derived.v1.1~");
@@ -765,7 +766,7 @@ mod tests {
         let file = GtsFile::new(
             "/path/to/file.json".to_string(),
             "file.json".to_string(),
-            content.clone(),
+            content,
         );
 
         assert_eq!(file.path, "/path/to/file.json");
@@ -804,7 +805,7 @@ mod tests {
             "name": "test"
         });
 
-        let result = ops.extract_id(content);
+        let result = ops.extract_id(&content);
 
         // calc_json_schema_id should be triggered and extract schema_id from type field
         assert_eq!(
@@ -826,7 +827,7 @@ mod tests {
             "type": "object"
         });
 
-        let result = ops.extract_id(content);
+        let result = ops.extract_id(&content);
 
         // When entity ID ends with ~, it IS the schema
         assert_eq!(result.id, "gts.vendor.package.namespace.type.v1.0~");
@@ -851,7 +852,7 @@ mod tests {
                 }
             }
         });
-        ops.add_schema("gts.test.compat.v1.0~".to_string(), old_schema);
+        ops.add_schema("gts.test.compat.v1.0~".to_string(), &old_schema);
 
         // Register new schema with expanded enum
         let new_schema = json!({
@@ -865,7 +866,7 @@ mod tests {
                 }
             }
         });
-        ops.add_schema("gts.test.compat.v1.1~".to_string(), new_schema);
+        ops.add_schema("gts.test.compat.v1.1~".to_string(), &new_schema);
 
         // Check compatibility - just verify the method executes
         let result = ops.compatibility("gts.test.compat.v1.0~", "gts.test.compat.v1.1~");
@@ -879,7 +880,7 @@ mod tests {
 
     /// Helper to convert a serializable value to a JSON object for testing
     fn to_json_obj<T: serde::Serialize>(value: &T) -> serde_json::Map<String, Value> {
-        match serde_json::to_value(value).unwrap() {
+        match serde_json::to_value(value).expect("test") {
             Value::Object(map) => map,
             other => {
                 let mut map = serde_json::Map::new();
@@ -901,10 +902,10 @@ mod tests {
 
         let json = to_json_obj(&result);
         assert_eq!(
-            json.get("id").unwrap().as_str().unwrap(),
+            json.get("id").expect("test").as_str().expect("test"),
             "gts.vendor.package.namespace.type.v1.0"
         );
-        assert!(json.get("valid").unwrap().as_bool().unwrap());
+        assert!(json.get("valid").expect("test").as_bool().expect("test"));
     }
 
     #[test]
@@ -922,15 +923,30 @@ mod tests {
         };
 
         let json = to_json_obj(&segment);
-        assert_eq!(json.get("vendor").unwrap().as_str().unwrap(), "vendor");
-        assert_eq!(json.get("package").unwrap().as_str().unwrap(), "package");
         assert_eq!(
-            json.get("namespace").unwrap().as_str().unwrap(),
+            json.get("vendor").expect("test").as_str().expect("test"),
+            "vendor"
+        );
+        assert_eq!(
+            json.get("package").expect("test").as_str().expect("test"),
+            "package"
+        );
+        assert_eq!(
+            json.get("namespace").expect("test").as_str().expect("test"),
             "namespace"
         );
-        assert_eq!(json.get("type").unwrap().as_str().unwrap(), "type");
-        assert_eq!(json.get("ver_major").unwrap().as_u64().unwrap(), 1);
-        assert_eq!(json.get("ver_minor").unwrap().as_u64().unwrap(), 0);
+        assert_eq!(
+            json.get("type").expect("test").as_str().expect("test"),
+            "type"
+        );
+        assert_eq!(
+            json.get("ver_major").expect("test").as_u64().expect("test"),
+            1
+        );
+        assert_eq!(
+            json.get("ver_minor").expect("test").as_u64().expect("test"),
+            0
+        );
     }
 
     #[test]
@@ -946,10 +962,10 @@ mod tests {
 
         let json = to_json_obj(&result);
         assert_eq!(
-            json.get("id").unwrap().as_str().unwrap(),
+            json.get("id").expect("test").as_str().expect("test"),
             "gts.vendor.package.namespace.type.v1.0"
         );
-        assert!(json.get("ok").unwrap().as_bool().unwrap());
+        assert!(json.get("ok").expect("test").as_bool().expect("test"));
         assert!(json.contains_key("segments"));
     }
 
@@ -966,14 +982,14 @@ mod tests {
 
         let json = to_json_obj(&result);
         assert_eq!(
-            json.get("candidate").unwrap().as_str().unwrap(),
+            json.get("candidate").expect("test").as_str().expect("test"),
             "gts.vendor.package.namespace.type.v1.0"
         );
         assert_eq!(
-            json.get("pattern").unwrap().as_str().unwrap(),
+            json.get("pattern").expect("test").as_str().expect("test"),
             "gts.vendor.*"
         );
-        assert!(json.get("match").unwrap().as_bool().unwrap());
+        assert!(json.get("match").expect("test").as_bool().expect("test"));
     }
 
     #[test]
@@ -987,11 +1003,11 @@ mod tests {
 
         let json = to_json_obj(&result);
         assert_eq!(
-            json.get("id").unwrap().as_str().unwrap(),
+            json.get("id").expect("test").as_str().expect("test"),
             "gts.vendor.package.namespace.type.v1.0"
         );
         assert_eq!(
-            json.get("uuid").unwrap().as_str().unwrap(),
+            json.get("uuid").expect("test").as_str().expect("test"),
             "550e8400-e29b-41d4-a716-446655440000"
         );
     }
@@ -1008,10 +1024,10 @@ mod tests {
 
         let json = to_json_obj(&result);
         assert_eq!(
-            json.get("id").unwrap().as_str().unwrap(),
+            json.get("id").expect("test").as_str().expect("test"),
             "gts.vendor.package.namespace.type.v1.0"
         );
-        assert!(json.get("ok").unwrap().as_bool().unwrap());
+        assert!(json.get("ok").expect("test").as_bool().expect("test"));
     }
 
     #[test]
@@ -1028,7 +1044,7 @@ mod tests {
         };
 
         // GtsSchemaGraphResult uses #[serde(transparent)] so it serializes as the graph directly
-        let json_value = serde_json::to_value(&result).unwrap();
+        let json_value = serde_json::to_value(&result).expect("test");
         assert!(json_value.get("id").is_some());
     }
 
@@ -1044,10 +1060,14 @@ mod tests {
 
         let json = to_json_obj(&info);
         assert_eq!(
-            json.get("id").unwrap().as_str().unwrap(),
+            json.get("id").expect("test").as_str().expect("test"),
             "gts.vendor.package.namespace.type.v1.0"
         );
-        assert!(!json.get("is_schema").unwrap().as_bool().unwrap());
+        assert!(!json
+            .get("is_schema")
+            .expect("test")
+            .as_bool()
+            .expect("test"));
         assert!(json.contains_key("schema_id"));
     }
 
@@ -1075,8 +1095,8 @@ mod tests {
         };
 
         let json = to_json_obj(&result);
-        assert_eq!(json.get("count").unwrap().as_u64().unwrap(), 2);
-        assert!(json.get("entities").unwrap().is_array());
+        assert_eq!(json.get("count").expect("test").as_u64().expect("test"), 2);
+        assert!(json.get("entities").expect("test").is_array());
     }
 
     #[test]
@@ -1092,9 +1112,9 @@ mod tests {
         };
 
         let json = to_json_obj(&result);
-        assert!(json.get("ok").unwrap().as_bool().unwrap());
+        assert!(json.get("ok").expect("test").as_bool().expect("test"));
         assert_eq!(
-            json.get("id").unwrap().as_str().unwrap(),
+            json.get("id").expect("test").as_str().expect("test"),
             "gts.vendor.package.namespace.type.v1.0"
         );
     }
@@ -1123,8 +1143,8 @@ mod tests {
         let result = GtsAddEntitiesResult { ok: true, results };
 
         let json = to_json_obj(&result);
-        assert!(json.get("ok").unwrap().as_bool().unwrap());
-        assert!(json.get("results").unwrap().is_array());
+        assert!(json.get("ok").expect("test").as_bool().expect("test"));
+        assert!(json.get("results").expect("test").is_array());
     }
 
     #[test]
@@ -1138,9 +1158,9 @@ mod tests {
         };
 
         let json = to_json_obj(&result);
-        assert!(json.get("ok").unwrap().as_bool().unwrap());
+        assert!(json.get("ok").expect("test").as_bool().expect("test"));
         assert_eq!(
-            json.get("id").unwrap().as_str().unwrap(),
+            json.get("id").expect("test").as_str().expect("test"),
             "gts.vendor.package.namespace.type.v1.0~"
         );
     }
@@ -1159,13 +1179,17 @@ mod tests {
 
         let json = to_json_obj(&result);
         assert_eq!(
-            json.get("id").unwrap().as_str().unwrap(),
+            json.get("id").expect("test").as_str().expect("test"),
             "gts.vendor.package.namespace.type.v1.0"
         );
         assert!(json.contains_key("schema_id"));
         assert!(json.contains_key("selected_entity_field"));
         assert!(json.contains_key("selected_schema_id_field"));
-        assert!(!json.get("is_schema").unwrap().as_bool().unwrap());
+        assert!(!json
+            .get("is_schema")
+            .expect("test")
+            .as_bool()
+            .expect("test"));
     }
 
     #[test]
@@ -1178,10 +1202,13 @@ mod tests {
 
         let json = to_json_obj(&result);
         assert_eq!(
-            json.get("gts_id").unwrap().as_str().unwrap(),
+            json.get("gts_id").expect("test").as_str().expect("test"),
             "gts.test.id.v1.0"
         );
-        assert_eq!(json.get("path").unwrap().as_str().unwrap(), "name");
+        assert_eq!(
+            json.get("path").expect("test").as_str().expect("test"),
+            "name"
+        );
         assert!(json.contains_key("resolved"));
     }
 
@@ -1281,7 +1308,7 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        let cast_result = result.unwrap();
+        let cast_result = result.expect("test");
         assert_eq!(cast_result.direction, "up");
         assert!(cast_result.casted_entity.is_some());
     }
@@ -1338,7 +1365,7 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        let cast_result = result.unwrap();
+        let cast_result = result.expect("test");
         assert!(!cast_result.incompatibility_reasons.is_empty());
     }
 
@@ -1367,10 +1394,16 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        let cast_result = result.unwrap();
-        let casted = cast_result.casted_entity.unwrap();
-        assert_eq!(casted.get("status").unwrap().as_str().unwrap(), "active");
-        assert_eq!(casted.get("count").unwrap().as_i64().unwrap(), 0);
+        let cast_result = result.expect("test");
+        let casted = cast_result.casted_entity.expect("test");
+        assert_eq!(
+            casted.get("status").expect("test").as_str().expect("test"),
+            "active"
+        );
+        assert_eq!(
+            casted.get("count").expect("test").as_i64().expect("test"),
+            0
+        );
     }
 
     #[test]
@@ -1401,7 +1434,7 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        let cast_result = result.unwrap();
+        let cast_result = result.expect("test");
         assert!(!cast_result.removed_properties.is_empty());
     }
 
@@ -1451,7 +1484,7 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        let cast_result = result.unwrap();
+        let cast_result = result.expect("test");
         assert_eq!(cast_result.direction, "down");
     }
 
@@ -1510,10 +1543,13 @@ mod tests {
 
         let json = to_json_obj(&result);
         assert_eq!(
-            json.get("from").unwrap().as_str().unwrap(),
+            json.get("from").expect("test").as_str().expect("test"),
             "gts.vendor.package.namespace.type.v1.0"
         );
-        assert_eq!(json.get("direction").unwrap().as_str().unwrap(), "up");
+        assert_eq!(
+            json.get("direction").expect("test").as_str().expect("test"),
+            "up"
+        );
     }
 
     #[test]
@@ -1617,7 +1653,7 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        let cast_result = result.unwrap();
+        let cast_result = result.expect("test");
         assert!(!cast_result.added_properties.is_empty());
     }
 
@@ -1747,7 +1783,7 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        let cast_result = result.unwrap();
+        let cast_result = result.expect("test");
         // Should not remove extra field when additionalProperties is true
         assert!(cast_result.removed_properties.is_empty());
     }
@@ -2019,7 +2055,7 @@ mod tests {
     #[test]
     fn test_gts_ops_reload_from_path() {
         let mut ops = GtsOps::new(None, None, 0);
-        ops.reload_from_path(vec![]);
+        ops.reload_from_path(&[]);
         // Just verify it doesn't crash
     }
 
@@ -2032,7 +2068,7 @@ mod tests {
             json!({"id": "gts.vendor.package.namespace.type.v1.1", "name": "test2"}),
         ];
 
-        let result = ops.add_entities(entities);
+        let result = ops.add_entities(&entities);
         assert_eq!(result.results.len(), 2);
     }
 
@@ -2085,7 +2121,7 @@ mod tests {
 
         ops.add_schema(
             "gts.vendor.package.namespace.type.v1.0~".to_string(),
-            schema,
+            &schema,
         );
 
         let result = ops.schema_graph("gts.vendor.package.namespace.type.v1.0~");
@@ -2103,7 +2139,7 @@ mod tests {
             }
         });
 
-        ops.add_entity(content, false);
+        ops.add_entity(&content, false);
 
         let result = ops.attr("gts.vendor.package.namespace.type.v1.0#user.name");
         // Just verify it executes
@@ -2119,7 +2155,7 @@ mod tests {
             "name": "test"
         });
 
-        ops.add_entity(content, false);
+        ops.add_entity(&content, false);
 
         let result = ops.attr("gts.vendor.package.namespace.type.v1.0");
         assert_eq!(result.path, "");
@@ -2206,7 +2242,7 @@ mod tests {
                 "id": format!("gts.vendor.package.namespace.type.v1.{}", i),
                 "name": format!("test{}", i)
             });
-            ops.add_entity(content, false);
+            ops.add_entity(&content, false);
         }
 
         let result = ops.list(10);
@@ -2223,7 +2259,7 @@ mod tests {
                 "id": format!("gts.vendor.package.namespace.type.v1.{}", i),
                 "name": format!("test{}", i)
             });
-            ops.add_entity(content, false);
+            ops.add_entity(&content, false);
         }
 
         let result = ops.list(2);
@@ -2254,7 +2290,7 @@ mod tests {
 
         ops.add_schema(
             "gts.vendor.package.namespace.type.v1.0~".to_string(),
-            schema,
+            &schema,
         );
 
         let content = json!({
@@ -2263,7 +2299,7 @@ mod tests {
             "name": "test"
         });
 
-        ops.add_entity(content, false);
+        ops.add_entity(&content, false);
 
         let result = ops.validate_instance("gts.vendor.package.namespace.type.v1.0");
         // Validation result has an id field matching the input
@@ -2327,11 +2363,11 @@ mod tests {
 
         ops.add_schema(
             "gts.vendor.package.namespace.type.v1.0~".to_string(),
-            schema1,
+            &schema1,
         );
         ops.add_schema(
             "gts.vendor.package.namespace.type.v1.1~".to_string(),
-            schema2,
+            &schema2,
         );
 
         let result = ops.compatibility(
@@ -2361,7 +2397,7 @@ mod tests {
         let entity = GtsEntity::new(
             None,
             None,
-            content,
+            &content,
             Some(&cfg),
             None,
             false,
@@ -2402,7 +2438,7 @@ mod tests {
         let from_schema = GtsEntity::new(
             None,
             None,
-            from_schema_content,
+            &from_schema_content,
             Some(&cfg),
             None,
             true,
@@ -2414,7 +2450,7 @@ mod tests {
         let to_schema = GtsEntity::new(
             None,
             None,
-            to_schema_content,
+            &to_schema_content,
             Some(&cfg),
             None,
             true,
@@ -2431,7 +2467,7 @@ mod tests {
         let instance = GtsEntity::new(
             None,
             None,
-            instance_content,
+            &instance_content,
             Some(&cfg),
             None,
             false,
@@ -2499,7 +2535,7 @@ mod tests {
         let entity = GtsEntity::new(
             None,
             None,
-            content,
+            &content,
             Some(&cfg),
             None,
             false,
@@ -2527,7 +2563,7 @@ mod tests {
         let entity = GtsEntity::new(
             Some(file),
             Some(0),
-            content,
+            &content,
             Some(&cfg),
             None,
             false,

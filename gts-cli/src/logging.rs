@@ -69,6 +69,7 @@ impl LoggingMiddleware {
         Self { verbose }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn handle(&self, request: Request, next: Next) -> Response {
         if self.verbose == 0 {
             return next.run(request).await;
@@ -97,31 +98,28 @@ impl LoggingMiddleware {
             if let Some(ref bytes) = body_bytes {
                 if !bytes.is_empty() {
                     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S,%3f");
-                    match serde_json::from_slice::<serde_json::Value>(bytes) {
-                        Ok(json) => {
-                            let body_str = serde_json::to_string_pretty(&json).unwrap_or_default();
-                            eprintln!(
-                                "{} - DEBUG - {}Request body:{}\n{}{}{}",
-                                timestamp,
-                                colors.dim,
-                                colors.reset,
-                                colors.gray,
-                                body_str,
-                                colors.reset
-                            );
-                        }
-                        Err(_) => {
-                            let body_str = String::from_utf8_lossy(bytes);
-                            eprintln!(
-                                "{} - DEBUG - {}Request body (raw):{}\n{}{}{}",
-                                timestamp,
-                                colors.dim,
-                                colors.reset,
-                                colors.gray,
-                                body_str,
-                                colors.reset
-                            );
-                        }
+                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(bytes) {
+                        let body_str = serde_json::to_string_pretty(&json).unwrap_or_default();
+                        eprintln!(
+                            "{} - DEBUG - {}Request body:{}\n{}{}{}",
+                            timestamp,
+                            colors.dim,
+                            colors.reset,
+                            colors.gray,
+                            body_str,
+                            colors.reset
+                        );
+                    } else {
+                        let body_str = String::from_utf8_lossy(bytes);
+                        eprintln!(
+                            "{} - DEBUG - {}Request body (raw):{}\n{}{}{}",
+                            timestamp,
+                            colors.dim,
+                            colors.reset,
+                            colors.gray,
+                            body_str,
+                            colors.reset
+                        );
                     }
                 }
             }
@@ -163,31 +161,28 @@ impl LoggingMiddleware {
             if let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await {
                 if !bytes.is_empty() {
                     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S,%3f");
-                    match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                        Ok(json) => {
-                            let body_str = serde_json::to_string_pretty(&json).unwrap_or_default();
-                            eprintln!(
-                                "{} - DEBUG - {}Response body:{}\n{}{}{}",
-                                timestamp,
-                                colors.dim,
-                                colors.reset,
-                                colors.gray,
-                                body_str,
-                                colors.reset
-                            );
-                        }
-                        Err(_) => {
-                            let body_str = String::from_utf8_lossy(&bytes);
-                            eprintln!(
-                                "{} - DEBUG - {}Response body (raw):{}\n{}{}{}",
-                                timestamp,
-                                colors.dim,
-                                colors.reset,
-                                colors.gray,
-                                body_str,
-                                colors.reset
-                            );
-                        }
+                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                        let body_str = serde_json::to_string_pretty(&json).unwrap_or_default();
+                        eprintln!(
+                            "{} - DEBUG - {}Response body:{}\n{}{}{}",
+                            timestamp,
+                            colors.dim,
+                            colors.reset,
+                            colors.gray,
+                            body_str,
+                            colors.reset
+                        );
+                    } else {
+                        let body_str = String::from_utf8_lossy(&bytes);
+                        eprintln!(
+                            "{} - DEBUG - {}Response body (raw):{}\n{}{}{}",
+                            timestamp,
+                            colors.dim,
+                            colors.reset,
+                            colors.gray,
+                            body_str,
+                            colors.reset
+                        );
                     }
                 }
                 return Response::from_parts(parts, Body::from(bytes));

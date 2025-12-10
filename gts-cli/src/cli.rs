@@ -100,7 +100,7 @@ enum Commands {
         #[arg(long, default_value = "8000")]
         port: u16,
     },
-    /// Generate OpenAPI specification
+    /// Generate `OpenAPI` specification
     OpenapiSpec {
         #[arg(long)]
         out: String,
@@ -109,7 +109,7 @@ enum Commands {
         #[arg(long, default_value = "8000")]
         port: u16,
     },
-    /// Generate GTS schemas from Rust source code with #[struct_to_gts_schema] annotations
+    /// Generate GTS schemas from Rust source code with `#[struct_to_gts_schema]` annotations
     GenerateFromRust {
         /// Source directory or file to scan for annotated structs
         #[arg(long)]

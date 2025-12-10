@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use gts_macros::struct_to_gts_schema;
 use serde::{Deserialize, Serialize};
 

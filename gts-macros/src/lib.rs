@@ -1,3 +1,6 @@
+// Proc macros run at compile time, so panics become compile errors
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
@@ -5,7 +8,7 @@ use syn::{
     parse_macro_input, Data, DeriveInput, Fields, LitStr, Token, Type,
 };
 
-/// Arguments for the struct_to_gts_schema macro
+/// Arguments for the `struct_to_gts_schema` macro
 struct GtsSchemaArgs {
     file_path: String,
     schema_id: String,
@@ -89,7 +92,7 @@ impl Parse for GtsSchemaArgs {
 ///
 /// The macro will cause a compile-time error if:
 /// - Any property listed in `properties` doesn't exist in the struct
-/// - Required attributes are missing (file_path, schema_id, description, properties)
+/// - Required attributes are missing (`file_path`, `schema_id`, `description`, `properties`)
 /// - The struct is not a struct with named fields
 ///
 /// # Generating Schemas
@@ -104,12 +107,16 @@ impl Parse for GtsSchemaArgs {
 /// gts generate-from-rust --source src/ --output schemas/
 /// ```
 #[proc_macro_attribute]
+#[allow(clippy::too_many_lines, clippy::missing_panics_doc)]
 pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as GtsSchemaArgs);
     let input = parse_macro_input!(item as DeriveInput);
 
     // Validate file_path ends with .json
-    if !args.file_path.ends_with(".json") {
+    if !std::path::Path::new(&args.file_path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+    {
         return syn::Error::new_spanned(
             &input.ident,
             format!(
@@ -155,7 +162,7 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
     // Validate that all requested properties exist
     let available_fields: Vec<String> = struct_fields
         .iter()
-        .map(|f| f.ident.as_ref().unwrap().to_string())
+        .filter_map(|f| f.ident.as_ref().map(ToString::to_string))
         .collect();
 
     for prop in &property_names {
@@ -176,8 +183,11 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
     let mut schema_properties = serde_json::Map::new();
     let mut required_fields = Vec::new();
 
-    for field in struct_fields.iter() {
-        let field_name = field.ident.as_ref().unwrap().to_string();
+    for field in struct_fields {
+        let Some(ident) = field.ident.as_ref() else {
+            continue;
+        };
+        let field_name = ident.to_string();
 
         if !property_names.contains(&field_name) {
             continue;
@@ -216,7 +226,8 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
     }
 
     // Generate the schema JSON string
-    let schema_json = serde_json::to_string_pretty(&schema).unwrap();
+    let schema_json =
+        serde_json::to_string_pretty(&schema).expect("schema serialization should not fail");
     let file_path = &args.file_path;
     let schema_id = &args.schema_id;
     let description = &args.description;
@@ -252,10 +263,10 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
 }
 
 /// Convert Rust types to JSON Schema types
-/// Returns (is_required, json_type, format)
+/// Returns (`is_required`, `json_type`, format)
 fn rust_type_to_json_schema(ty: &Type) -> (bool, &'static str, Option<&'static str>) {
     let type_str = quote!(#ty).to_string();
-    let type_str = type_str.replace(" ", "");
+    let type_str = type_str.replace(' ', "");
 
     // Check if it's an Option type
     let is_optional = type_str.starts_with("Option<");
@@ -270,8 +281,8 @@ fn rust_type_to_json_schema(ty: &Type) -> (bool, &'static str, Option<&'static s
 
     let (json_type, format) = match inner_type {
         "String" | "str" | "&str" => ("string", None),
-        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" => ("integer", None),
-        "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => ("integer", None),
+        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
+        | "usize" => ("integer", None),
         "f32" | "f64" => ("number", None),
         "bool" => ("boolean", None),
         "Vec<String>" | "Vec<&str>" => ("array", None),

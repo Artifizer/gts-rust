@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "Global Type System (GTS) CLI and HTTP server"
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "gts"
 path = "src/main.rs"

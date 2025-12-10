@@ -57,12 +57,8 @@ impl GtsEntityCastResult {
         // Determine direction by IDs
         let direction = Self::infer_direction(from_instance_id, to_schema_id);
 
-        // Determine which is old/new based on direction
-        let (old_schema, new_schema) = match direction.as_str() {
-            "up" => (from_schema_content, to_schema_content),
-            "down" => (to_schema_content, from_schema_content),
-            _ => (from_schema_content, to_schema_content),
-        };
+        // Both directions use the same schema order for compatibility checks
+        let (old_schema, new_schema) = (from_schema_content, to_schema_content);
 
         // Check compatibility
         let (is_backward, backward_errors) =
@@ -71,11 +67,9 @@ impl GtsEntityCastResult {
             Self::check_forward_compatibility(old_schema, new_schema);
 
         // Apply casting rules to the instance
-        let instance_obj = if let Some(obj) = from_instance_content.as_object() {
-            obj.clone()
-        } else {
-            return Err(SchemaCastError::InstanceMustBeObject);
-        };
+        let instance_obj = from_instance_content
+            .as_object()
+            .ok_or(SchemaCastError::InstanceMustBeObject)?;
 
         let (casted, added, removed, incompatibility_reasons) =
             match Self::cast_instance_to_schema(instance_obj, &target_schema, "") {
@@ -178,9 +172,9 @@ impl GtsEntityCastResult {
         s.clone()
     }
 
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, clippy::too_many_lines)]
     fn cast_instance_to_schema(
-        instance: Map<String, Value>,
+        instance: &Map<String, Value>,
         schema: &Value,
         base_path: &str,
     ) -> Result<(Map<String, Value>, Vec<String>, Vec<String>, Vec<String>), SchemaCastError> {
@@ -203,14 +197,14 @@ impl GtsEntityCastResult {
             .and_then(|r| r.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter_map(|v| v.as_str().map(ToString::to_string))
                     .collect()
             })
             .unwrap_or_default();
 
         let additional = schema_obj
             .get("additionalProperties")
-            .and_then(|a| a.as_bool())
+            .and_then(Value::as_bool)
             .unwrap_or(true);
 
         let mut result = instance.clone();
@@ -315,7 +309,7 @@ impl GtsEntityCastResult {
                                 };
                                 let (new_obj, add_sub, rem_sub, new_reasons) =
                                     Self::cast_instance_to_schema(
-                                        val_obj.clone(),
+                                        val_obj,
                                         &nested_schema,
                                         &new_base,
                                     )?;
@@ -343,7 +337,7 @@ impl GtsEntityCastResult {
                                                     };
                                                     let (new_item, add_sub, rem_sub, new_reasons) =
                                                         Self::cast_instance_to_schema(
-                                                            item_obj.clone(),
+                                                            item_obj,
                                                             &nested_schema,
                                                             &new_base,
                                                         )?;
@@ -454,8 +448,8 @@ impl GtsEntityCastResult {
         let mut errors = Vec::new();
 
         // Check minimum constraint
-        let old_min = old_schema.get(min_key).and_then(|v| v.as_f64());
-        let new_min = new_schema.get(min_key).and_then(|v| v.as_f64());
+        let old_min = old_schema.get(min_key).and_then(Value::as_f64);
+        let new_min = new_schema.get(min_key).and_then(Value::as_f64);
 
         if let (Some(old_m), Some(new_m)) = (old_min, new_min) {
             if check_tightening && new_m > old_m {
@@ -469,12 +463,9 @@ impl GtsEntityCastResult {
                     prop, min_key, old_m, new_m
                 ));
             }
-        } else if check_tightening && old_min.is_none() && new_min.is_some() {
+        } else if let (true, None, Some(new_m)) = (check_tightening, old_min, new_min) {
             errors.push(format!(
-                "Property '{}' added {} constraint: {}",
-                prop,
-                min_key,
-                new_min.unwrap()
+                "Property '{prop}' added {min_key} constraint: {new_m}"
             ));
         } else if !check_tightening && old_min.is_some() && new_min.is_none() {
             errors.push(format!(
@@ -484,8 +475,8 @@ impl GtsEntityCastResult {
         }
 
         // Check maximum constraint
-        let old_max = old_schema.get(max_key).and_then(|v| v.as_f64());
-        let new_max = new_schema.get(max_key).and_then(|v| v.as_f64());
+        let old_max = old_schema.get(max_key).and_then(Value::as_f64);
+        let new_max = new_schema.get(max_key).and_then(Value::as_f64);
 
         if let (Some(old_m), Some(new_m)) = (old_max, new_max) {
             if check_tightening && new_m < old_m {
@@ -499,12 +490,9 @@ impl GtsEntityCastResult {
                     prop, max_key, old_m, new_m
                 ));
             }
-        } else if check_tightening && old_max.is_none() && new_max.is_some() {
+        } else if let (true, None, Some(new_m)) = (check_tightening, old_max, new_max) {
             errors.push(format!(
-                "Property '{}' added {} constraint: {}",
-                prop,
-                max_key,
-                new_max.unwrap()
+                "Property '{prop}' added {max_key} constraint: {new_m}"
             ));
         } else if !check_tightening && old_max.is_some() && new_max.is_none() {
             errors.push(format!(
@@ -578,6 +566,7 @@ impl GtsEntityCastResult {
         Self::check_schema_compatibility(old_schema, new_schema, false)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn check_schema_compatibility(
         old_schema: &Value,
         new_schema: &Value,
@@ -605,7 +594,7 @@ impl GtsEntityCastResult {
             .and_then(|r| r.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter_map(|v| v.as_str().map(ToString::to_string))
                     .collect()
             })
             .unwrap_or_default();
@@ -615,7 +604,7 @@ impl GtsEntityCastResult {
             .and_then(|r| r.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter_map(|v| v.as_str().map(ToString::to_string))
                     .collect()
             })
             .unwrap_or_default();
@@ -666,11 +655,11 @@ impl GtsEntityCastResult {
                 if let (Some(old_e), Some(new_e)) = (old_enum, new_enum) {
                     let old_enum_set: HashSet<String> = old_e
                         .iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .filter_map(|v| v.as_str().map(ToString::to_string))
                         .collect();
                     let new_enum_set: HashSet<String> = new_e
                         .iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .filter_map(|v| v.as_str().map(ToString::to_string))
                         .collect();
 
                     if check_backward {
@@ -733,6 +722,7 @@ impl GtsEntityCastResult {
     }
 }
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -821,17 +811,20 @@ mod tests {
             error: None,
         };
 
-        let json_value = serde_json::to_value(&result).unwrap();
-        let json = json_value.as_object().unwrap();
+        let json_value = serde_json::to_value(&result).expect("test");
+        let json = json_value.as_object().expect("test");
         assert_eq!(
-            json.get("from").unwrap().as_str().unwrap(),
+            json.get("from").expect("test").as_str().expect("test"),
             "gts.vendor.package.namespace.type.v1.0"
         );
         assert_eq!(
-            json.get("to").unwrap().as_str().unwrap(),
+            json.get("to").expect("test").as_str().expect("test"),
             "gts.vendor.package.namespace.type.v2.0"
         );
-        assert_eq!(json.get("direction").unwrap().as_str().unwrap(), "up");
+        assert_eq!(
+            json.get("direction").expect("test").as_str().expect("test"),
+            "up"
+        );
     }
 
     #[test]
