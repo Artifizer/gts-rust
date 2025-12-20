@@ -160,7 +160,7 @@ pub struct GtsOps {
 }
 
 impl GtsOps {
-    #[must_use] 
+    #[must_use]
     pub fn new(path: Option<Vec<String>>, config: Option<String>, verbose: usize) -> Self {
         let cfg = Self::load_config(config);
         let reader: Option<Box<dyn crate::store::GtsReader>> = path.as_ref().map(|p| {
@@ -328,7 +328,7 @@ impl GtsOps {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn validate_id(&self, gts_id: &str) -> GtsIdValidationResult {
         match GtsID::new(gts_id) {
             Ok(_) => GtsIdValidationResult {
@@ -369,7 +369,7 @@ impl GtsOps {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn match_id_pattern(&self, candidate: &str, pattern: &str) -> GtsIdMatchResult {
         match (GtsID::new(candidate), GtsWildcard::new(pattern)) {
             (Ok(c), Ok(p)) => {
@@ -390,7 +390,7 @@ impl GtsOps {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn uuid(&self, gts_id: &str) -> GtsUuidResult {
         match GtsID::new(gts_id) {
             Ok(g) => GtsUuidResult {
@@ -479,7 +479,7 @@ impl GtsOps {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn query(&self, expr: &str, limit: usize) -> GtsStoreQueryResult {
         self.store.query(expr, limit)
     }
@@ -500,7 +500,7 @@ impl GtsOps {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn extract_id(&self, content: &Value) -> GtsExtractIdResult {
         let entity = GtsEntity::new(
             None,
@@ -551,7 +551,7 @@ impl GtsOps {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get_entities(&self, limit: usize) -> GtsEntitiesListResult {
         let all_entities: Vec<_> = self.store.items().collect();
         let total = all_entities.len();
@@ -575,7 +575,7 @@ impl GtsOps {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn list(&self, limit: usize) -> GtsEntitiesListResult {
         self.get_entities(limit)
     }

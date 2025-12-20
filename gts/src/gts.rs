@@ -323,12 +323,12 @@ impl GtsID {
         })
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_type(&self) -> bool {
         self.id.ends_with('~')
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get_type_id(&self) -> Option<String> {
         if self.gts_id_segments.len() < 2 {
             return None;
@@ -525,7 +525,8 @@ impl GtsWildcard {
         if p.contains('*') && !p.ends_with(".*") && !p.ends_with("~*") {
             return Err(GtsError::InvalidWildcard {
                 pattern: pattern.to_owned(),
-                cause: "The wildcard '*' token is allowed only at the end of the pattern".to_owned(),
+                cause: "The wildcard '*' token is allowed only at the end of the pattern"
+                    .to_owned(),
             });
         }
 

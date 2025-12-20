@@ -597,7 +597,7 @@ impl GtsStore {
         Value::Object(ret)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn query(&self, expr: &str, limit: usize) -> GtsStoreQueryResult {
         let mut result = GtsStoreQueryResult {
             error: String::new(),

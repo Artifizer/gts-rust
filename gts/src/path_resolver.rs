@@ -15,7 +15,7 @@ pub struct JsonPathResolver {
 }
 
 impl JsonPathResolver {
-    #[must_use] 
+    #[must_use]
     pub fn new(gts_id: String, content: Value) -> Self {
         JsonPathResolver {
             gts_id,
