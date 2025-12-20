@@ -12,6 +12,7 @@ help:
 # Build the workspace
 build:
 	cargo build --workspace
+	cargo build --workspace --release
 
 # Fix formatting issues
 dev-fmt:
