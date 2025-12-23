@@ -1,4 +1,4 @@
-error: unexpected end of input, Missing required attribute: file_path
+error: unexpected end of input, Missing required attribute: dir_path
  --> tests/compile_fail/missing_file_path.rs:5:1
   |
 5 | / #[struct_to_gts_schema(

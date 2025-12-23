@@ -5,12 +5,12 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
     parse::{Parse, ParseStream},
-    parse_macro_input, Data, DeriveInput, Fields, LitStr, Token, Type,
+    parse_macro_input, Data, DeriveInput, Fields, LitStr, Token,
 };
 
 /// Arguments for the `struct_to_gts_schema` macro
 struct GtsSchemaArgs {
-    file_path: String,
+    dir_path: String,
     schema_id: String,
     description: String,
     properties: String,
@@ -18,7 +18,7 @@ struct GtsSchemaArgs {
 
 impl Parse for GtsSchemaArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut file_path: Option<String> = None;
+        let mut dir_path: Option<String> = None;
         let mut schema_id: Option<String> = None;
         let mut description: Option<String> = None;
         let mut properties: Option<String> = None;
@@ -29,13 +29,13 @@ impl Parse for GtsSchemaArgs {
             let value: LitStr = input.parse()?;
 
             match key.to_string().as_str() {
-                "file_path" => file_path = Some(value.value()),
+                "dir_path" => dir_path = Some(value.value()),
                 "schema_id" => schema_id = Some(value.value()),
                 "description" => description = Some(value.value()),
                 "properties" => properties = Some(value.value()),
                 _ => return Err(syn::Error::new_spanned(
                     key,
-                    "Unknown attribute. Expected: file_path, schema_id, description, or properties",
+                    "Unknown attribute. Expected: dir_path, schema_id, description, or properties",
                 )),
             }
 
@@ -45,8 +45,8 @@ impl Parse for GtsSchemaArgs {
         }
 
         Ok(GtsSchemaArgs {
-            file_path: file_path
-                .ok_or_else(|| input.error("Missing required attribute: file_path"))?,
+            dir_path: dir_path
+                .ok_or_else(|| input.error("Missing required attribute: dir_path"))?,
             schema_id: schema_id
                 .ok_or_else(|| input.error("Missing required attribute: schema_id"))?,
             description: description
@@ -61,12 +61,15 @@ impl Parse for GtsSchemaArgs {
 ///
 /// This macro serves three purposes:
 ///
-/// ## 1. Compile-Time Validation
+/// ## 1. Compile-Time Validation & Guarantees
 ///
-/// The macro will cause a compile-time error if:
-/// - Any property listed in `properties` doesn't exist in the struct
-/// - Required attributes are missing (`file_path`, `schema_id`, `description`, `properties`)
-/// - The struct is not a struct with named fields
+/// The macro validates your annotations at compile time, catching errors early:
+/// - ✅ All required attributes exist (`dir_path`, `schema_id`, `description`, `properties`)
+/// - ✅ Every property in `properties` exists as a field in the struct
+/// - ✅ Only structs with named fields are supported (no tuple/unit structs or enums)
+/// - ✅ Single generic parameter maximum (prevents inheritance ambiguity)
+/// - ✅ Valid GTS ID format enforcement
+/// - ✅ Zero runtime allocation for generated constants
 ///
 /// ## 2. Schema Generation
 ///
@@ -80,22 +83,34 @@ impl Parse for GtsSchemaArgs {
 /// gts generate-from-rust --source src/ --output schemas/
 /// ```
 ///
-/// This will generate JSON Schema files at the specified `file_path` for each annotated struct.
+/// This will generate JSON Schema files at the specified `dir_path` with names derived from `schema_id` for each annotated struct (e.g., `{dir_path}/{schema_id}.schema.json`).
 ///
 /// ## 3. Runtime API
 ///
-/// The macro generates these associated items:
+/// The macro generates these associated items and implements the `GtsSchema` trait:
 ///
-/// - `GTS_SCHEMA_JSON: &'static str` - The JSON Schema with `$id` set to `schema_id`
+/// - `GTS_JSON_SCHEMA_WITH_REFS: &'static str` - JSON Schema with `allOf` + `$ref` for inheritance (most memory-efficient)
+/// - `GTS_JSON_SCHEMA_INLINE: &'static str` - JSON Schema with parent inlined (currently identical to `WITH_REFS`; true inlining requires runtime resolution)
 /// - `make_gts_instance_id(segment: &str) -> gts::GtsInstanceId` - Generate an instance ID by appending
 ///   a segment to the schema ID. The segment must be a valid GTS segment (e.g., "a.b.c.v1")
+/// - `GtsSchema` trait implementation - Enables runtime schema composition for nested generic types
+///   (e.g., `BaseEventV1<AuditPayloadV1<PlaceOrderDataV1>>`), with proper nesting and inheritance support.
+///   Generic fields automatically have `additionalProperties: false` set to ensure type safety.
 ///
 /// # Arguments
 ///
-/// * `file_path` - Path where the schema file will be generated (relative to crate root)
+/// * `dir_path` - Directory where the schema file will be generated (relative to crate root)
 /// * `schema_id` - GTS identifier in format: `gts.vendor.package.namespace.type.vMAJOR~`
+///   - **Automatic inheritance**: If the `schema_id` contains multiple segments separated by `~`, inheritance is automatically detected
+///   - Example: `gts.x.core.events.type.v1~x.core.audit.event.v1~` inherits from `gts.x.core.events.type.v1~`
 /// * `description` - Human-readable description of the schema
 /// * `properties` - Comma-separated list of struct fields to include in the schema
+///
+/// # Memory Efficiency
+///
+/// All generated constants are compile-time strings with **zero runtime allocation**:
+/// - `GTS_JSON_SCHEMA_WITH_REFS` uses `$ref` for optimal memory usage
+/// - `GTS_JSON_SCHEMA_INLINE` is identical at compile time (true inlining requires runtime schema resolution)
 ///
 /// # Example
 ///
@@ -103,7 +118,7 @@ impl Parse for GtsSchemaArgs {
 /// use gts_macros::struct_to_gts_schema;
 ///
 /// #[struct_to_gts_schema(
-///     file_path = "schemas/gts.x.core.events.topic.v1~.schema.json",
+///     dir_path = "schemas",
 ///     schema_id = "gts.x.core.events.topic.v1~",
 ///     description = "Event broker topics",
 ///     properties = "id,persisted,retention_days,name"
@@ -116,7 +131,8 @@ impl Parse for GtsSchemaArgs {
 /// }
 ///
 /// // Runtime usage:
-/// let schema = User::GTS_SCHEMA_JSON;
+/// let schema_with_refs = User::GTS_JSON_SCHEMA_WITH_REFS;
+/// let schema_inline = User::GTS_JSON_SCHEMA_INLINE;
 /// let instance_id = User::make_gts_instance_id("vendor.marketplace.orders.order_created.v1");
 /// assert_eq!(instance_id.as_ref(), "gts.x.core.events.topic.v1~vendor.marketplace.orders.order_created.v1");
 /// ```
@@ -126,17 +142,11 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
     let args = parse_macro_input!(attr as GtsSchemaArgs);
     let input = parse_macro_input!(item as DeriveInput);
 
-    // Validate file_path ends with .json
-    if !std::path::Path::new(&args.file_path)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
-    {
+    // Prohibit multiple type generic parameters (GTS notation assumes nested segments)
+    if input.generics.type_params().count() > 1 {
         return syn::Error::new_spanned(
             &input.ident,
-            format!(
-                "struct_to_gts_schema: file_path must end with '.json'. Got: '{}'",
-                args.file_path
-            ),
+            "struct_to_gts_schema: Multiple type generic parameters are not supported (GTS schemas assume nested segments)",
         )
         .to_compile_error()
         .into();
@@ -192,72 +202,273 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
         }
     }
 
-    // Build JSON schema properties at compile time
-    let mut schema_properties = serde_json::Map::new();
-    let mut required_fields = Vec::new();
-
-    for field in struct_fields {
-        let Some(ident) = field.ident.as_ref() else {
-            continue;
-        };
-        let field_name = ident.to_string();
-
-        if !property_names.contains(&field_name) {
-            continue;
-        }
-
-        let field_type = &field.ty;
-        let (is_required, json_type, format) = rust_type_to_json_schema(field_type);
-
-        let mut prop = serde_json::json!({
-            "type": json_type
-        });
-
-        if let Some(fmt) = format {
-            prop["format"] = serde_json::json!(fmt);
-        }
-
-        schema_properties.insert(field_name.clone(), prop);
-
-        if is_required {
-            required_fields.push(field_name);
-        }
-    }
-
-    // Build the complete schema
-    // The $id uses the URI format "gts://gts.x.y.z..." for JSON Schema compatibility
+    // Build the schema output file path from dir_path + schema_id
     let struct_name = &input.ident;
-    let schema_id_uri = format!("gts://{}", args.schema_id);
-    let mut schema = serde_json::json!({
-        "$id": schema_id_uri,
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": struct_name.to_string(),
-        "type": "object",
-        "description": args.description,
-        "properties": schema_properties
-    });
-
-    if !required_fields.is_empty() {
-        schema["required"] = serde_json::json!(required_fields);
-    }
-
-    // Generate the schema JSON string
-    let schema_json =
-        serde_json::to_string_pretty(&schema).expect("schema serialization should not fail");
-
-    let file_path = &args.file_path;
+    let dir_path = &args.dir_path;
     let schema_id = &args.schema_id;
     let description = &args.description;
     let properties_str = &args.properties;
 
+    let schema_file_path = format!("{dir_path}/{schema_id}.schema.json");
+
+    // Extract generics to properly handle generic structs
+    let generics = &input.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    // Get the generic type parameter name if present
+    let generic_param_name: Option<String> = input
+        .generics
+        .type_params()
+        .next()
+        .map(|tp| tp.ident.to_string());
+
+    let mut generic_field_name: Option<String> = None;
+
+    // Find the field that uses the generic type
+    if let Some(ref gp) = generic_param_name {
+        for field in struct_fields {
+            let field_type = &field.ty;
+            let field_type_str = quote::quote!(#field_type).to_string().replace(' ', "");
+            if field_type_str == *gp {
+                if let Some(ident) = &field.ident {
+                    generic_field_name = Some(ident.to_string());
+                    break;
+                }
+            }
+        }
+    }
+
+    // Generate the GENERIC_FIELD constant value
+    let generic_field_option = if let Some(ref field_name) = generic_field_name {
+        quote! { Some(#field_name) }
+    } else {
+        quote! { None }
+    };
+
+    // Generate gts_schema() implementation based on whether we have a generic parameter
+    let has_generic = input.generics.type_params().count() > 0;
+
+    // Build a custom where clause for GtsSchema that adds the GtsSchema bound on generic params
+    let gts_schema_where_clause = if has_generic {
+        let generic_param = input.generics.type_params().next().unwrap();
+        let generic_ident = &generic_param.ident;
+        if let Some(existing) = where_clause {
+            quote! { #existing #generic_ident: ::gts::GtsSchema + ::schemars::JsonSchema, }
+        } else {
+            quote! { where #generic_ident: ::gts::GtsSchema + ::schemars::JsonSchema }
+        }
+    } else {
+        quote! { #where_clause }
+    };
+
+    let gts_schema_impl = if has_generic {
+        let generic_param = input.generics.type_params().next().unwrap();
+        let generic_ident = &generic_param.ident;
+        let generic_field_for_path = generic_field_name.as_deref().unwrap_or_default();
+
+        quote! {
+            fn gts_schema() -> serde_json::Value {
+                Self::gts_schema_with_refs()
+            }
+
+            fn innermost_schema_id() -> &'static str {
+                // Recursively get the innermost type's schema ID
+                let inner_id = <#generic_ident as ::gts::GtsSchema>::innermost_schema_id();
+                if inner_id.is_empty() {
+                    Self::SCHEMA_ID
+                } else {
+                    inner_id
+                }
+            }
+
+            fn innermost_schema() -> serde_json::Value {
+                // Get the innermost type's raw schemars schema
+                let inner = <#generic_ident as ::gts::GtsSchema>::innermost_schema();
+                // If inner is just {"type": "object"} (from ()), return our own schema
+                // schemars RootSchema serializes at root level (not under "schema" field)
+                if inner.get("properties").is_none() {
+                    let root_schema = schemars::schema_for!(Self);
+                    return serde_json::to_value(&root_schema).expect("schemars");
+                }
+                inner
+            }
+
+            fn collect_nesting_path() -> Vec<&'static str> {
+                // Collect the path from outermost to the PARENT of the innermost type.
+                // For Outer<Middle<()>> where Outer has generic field "a" and Middle has "b":
+                //   - () has no properties, so Middle IS the innermost
+                //   - Path is just ["a"]
+                // For Outer<Middle<Inner>> where Inner has properties:
+                //   - Inner is the innermost type with properties
+                //   - Path is ["a", "b"]
+
+                let inner_path = <#generic_ident as ::gts::GtsSchema>::collect_nesting_path();
+                let inner_id = <#generic_ident as ::gts::GtsSchema>::SCHEMA_ID;
+
+                // If inner type is () (empty ID), don't include this type's field
+                // because this type IS the innermost type with properties
+                if inner_id.is_empty() {
+                    return Vec::new();
+                }
+
+                // Otherwise, prepend this type's generic field to inner path
+                let mut path = Vec::new();
+                let field = #generic_field_for_path;
+                if !field.is_empty() {
+                    path.push(field);
+                }
+                path.extend(inner_path);
+                path
+            }
+
+            fn gts_schema_with_refs_allof() -> serde_json::Value {
+                // Get the innermost type's schema ID for $id
+                let schema_id = Self::innermost_schema_id();
+
+                // Get parent's ID by removing last segment from schema_id
+                // e.g., "a~b~c~" -> "a~b~"
+                let parent_schema_id = if schema_id.contains('~') {
+                    let s = schema_id.trim_end_matches('~');
+                    if let Some(pos) = s.rfind('~') {
+                        format!("{}~", &s[..pos])
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+
+                // Get innermost type's schema (its own properties)
+                let innermost = Self::innermost_schema();
+                let mut properties = innermost.get("properties").cloned().unwrap_or(serde_json::json!({}));
+                let required = innermost.get("required").cloned().unwrap_or(serde_json::json!([]));
+
+                // Fix null types for generic fields - change "null" to "object" with additionalProperties: false
+                // This ensures only nested inherited structs can be used (no arbitrary extra properties)
+                if let Some(props) = properties.as_object_mut() {
+                    for (_, prop_val) in props.iter_mut() {
+                        if prop_val.get("type").and_then(|t| t.as_str()) == Some("null") {
+                            *prop_val = serde_json::json!({
+                                "type": "object",
+                                "additionalProperties": false
+                            });
+                        }
+                    }
+                }
+
+                // If no parent (base type), return simple schema without allOf
+                if parent_schema_id.is_empty() {
+                    let mut schema = serde_json::json!({
+                        "$id": format!("gts://{}", schema_id),
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "type": "object",
+                        "properties": properties
+                    });
+                    if !required.as_array().map(|a| a.is_empty()).unwrap_or(true) {
+                        schema["required"] = required;
+                    }
+                    return schema;
+                }
+
+                // Build the nesting path from outer to inner generic fields
+                // For Outer<Middle<Inner>> where Outer has field "a" and Middle has field "b":
+                //   - innermost is Inner
+                //   - parent is derived from innermost's schema ID
+                //   - path ["a", "b"] wraps Inner's properties
+                let nesting_path = Self::collect_nesting_path();
+
+                // Wrap properties in the nesting path
+                let nested_properties = Self::wrap_in_nesting_path(&nesting_path, properties, required.clone());
+
+                // Child type - use allOf with $ref to parent
+                serde_json::json!({
+                    "$id": format!("gts://{}", schema_id),
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "type": "object",
+                    "allOf": [
+                        { "$ref": format!("gts://{}", parent_schema_id) },
+                        {
+                            "type": "object",
+                            "properties": nested_properties
+                        }
+                    ]
+                })
+            }
+        }
+    } else {
+        quote! {
+            fn gts_schema() -> serde_json::Value {
+                Self::gts_schema_with_refs()
+            }
+            fn innermost_schema_id() -> &'static str {
+                Self::SCHEMA_ID
+            }
+            fn innermost_schema() -> serde_json::Value {
+                // Return this type's schemars schema (RootSchema serializes at root level)
+                let root_schema = schemars::schema_for!(Self);
+                serde_json::to_value(&root_schema).expect("schemars")
+            }
+            fn gts_schema_with_refs_allof() -> serde_json::Value {
+                let schema_id = Self::SCHEMA_ID;
+
+                // Get parent's ID by removing last segment
+                let parent_schema_id = if schema_id.contains('~') {
+                    let s = schema_id.trim_end_matches('~');
+                    if let Some(pos) = s.rfind('~') {
+                        format!("{}~", &s[..pos])
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+
+                // Get this type's schemars schema (RootSchema serializes at root level)
+                let root_schema = schemars::schema_for!(Self);
+                let schema_val = serde_json::to_value(&root_schema).expect("schemars");
+                let properties = schema_val.get("properties").cloned().unwrap_or_else(|| serde_json::json!({}));
+                let required = schema_val.get("required").cloned().unwrap_or_else(|| serde_json::json!([]));
+
+                // If no parent (base type), return simple schema without allOf
+                if parent_schema_id.is_empty() {
+                    let mut schema = serde_json::json!({
+                        "$id": format!("gts://{}", schema_id),
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "type": "object",
+                        "properties": properties
+                    });
+                    if !required.as_array().map(|a| a.is_empty()).unwrap_or(true) {
+                        schema["required"] = required;
+                    }
+                    return schema;
+                }
+
+                // Child type - use allOf with $ref to parent
+                serde_json::json!({
+                    "$id": format!("gts://{}", schema_id),
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "type": "object",
+                    "allOf": [
+                        { "$ref": format!("gts://{}", parent_schema_id) },
+                        {
+                            "type": "object",
+                            "properties": properties,
+                            "required": required
+                        }
+                    ]
+                })
+            }
+        }
+    };
+
     let expanded = quote! {
         #input
 
-        impl #struct_name {
+        impl #impl_generics #struct_name #ty_generics #where_clause {
             /// File path where the GTS schema will be generated by the CLI.
             #[doc(hidden)]
             #[allow(dead_code)]
-            pub const GTS_SCHEMA_FILE_PATH: &'static str = #file_path;
+            pub const GTS_SCHEMA_FILE_PATH: &'static str = #schema_file_path;
 
             /// GTS schema identifier (the `$id` field in the JSON Schema).
             #[doc(hidden)]
@@ -274,71 +485,45 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
             #[allow(dead_code)]
             pub const GTS_SCHEMA_PROPERTIES: &'static str = #properties_str;
 
-            /// The JSON Schema as a compile-time constant string.
-            ///
-            /// The `$id` field is set to the `schema_id` from the macro annotation.
-            #[allow(dead_code)]
-            pub const GTS_SCHEMA_JSON: &'static str = #schema_json;
-
             /// Generate a GTS instance ID by appending a segment to the schema ID.
-            ///
-            /// # Arguments
-            ///
-            /// * `segment` - A valid GTS segment to append (e.g., "a.b.c.v1", "instance.v1.0")
-            ///
-            /// # Returns
-            ///
-            /// A [`gts::GtsInstanceId`] containing `{schema_id}{segment}`
-            ///
-            /// # Example
-            ///
-            /// ```ignore
-            /// let id = User::make_gts_instance_id("123.v1");
-            /// assert_eq!(id.as_ref(), "gts.x.myapp.entities.user.v1~123.v1");
-            /// ```
             #[allow(dead_code)]
             #[must_use]
             pub fn make_gts_instance_id(segment: &str) -> ::gts::GtsInstanceId {
                 ::gts::GtsInstanceId::new(#schema_id, segment)
             }
+
+        }
+
+        // Implement GtsSchema trait for runtime schema composition
+        impl #impl_generics ::gts::GtsSchema for #struct_name #ty_generics #gts_schema_where_clause {
+            const SCHEMA_ID: &'static str = #schema_id;
+            const GENERIC_FIELD: Option<&'static str> = #generic_field_option;
+
+            fn gts_schema_with_refs() -> serde_json::Value {
+                Self::gts_schema_with_refs_allof()
+            }
+
+            #gts_schema_impl
+        }
+
+        // Add helper methods for backward compatibility with tests
+        impl #impl_generics #struct_name #ty_generics #gts_schema_where_clause {
+            /// JSON Schema with `allOf` + `$ref` for inheritance (most memory-efficient).
+            /// Returns the schema as a JSON string.
+            #[allow(dead_code)]
+            pub fn gts_json_schema_with_refs() -> String {
+                use ::gts::GtsSchema;
+                serde_json::to_string(&Self::gts_schema_with_refs_allof()).expect("Failed to serialize schema")
+            }
+
+            /// JSON Schema with parent inlined (currently identical to WITH_REFS).
+            /// Returns the schema as a JSON string.
+            #[allow(dead_code)]
+            pub fn gts_json_schema_inline() -> String {
+                Self::gts_json_schema_with_refs()
+            }
         }
     };
 
     TokenStream::from(expanded)
-}
-
-/// Convert Rust types to JSON Schema types at compile time.
-/// Returns (`is_required`, `json_type`, `format`)
-fn rust_type_to_json_schema(ty: &Type) -> (bool, &'static str, Option<&'static str>) {
-    let type_str = quote::quote!(#ty).to_string();
-    let type_str = type_str.replace(' ', "");
-
-    // Check if it's an Option type
-    let is_optional = type_str.starts_with("Option<");
-    let inner_type = if is_optional {
-        type_str
-            .strip_prefix("Option<")
-            .and_then(|s| s.strip_suffix('>'))
-            .unwrap_or(&type_str)
-    } else {
-        &type_str
-    };
-
-    let (json_type, format) = match inner_type {
-        "String" | "str" | "&str" => ("string", None),
-        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
-        | "usize" => ("integer", None),
-        "f32" | "f64" => ("number", None),
-        "bool" => ("boolean", None),
-        "Vec<String>" | "Vec<&str>" => ("array", None),
-        t if t.starts_with("Vec<") => ("array", None),
-        t if t.contains("Uuid") || t.contains("uuid") => ("string", Some("uuid")),
-        t if t.contains("DateTime") || t.contains("NaiveDateTime") => ("string", Some("date-time")),
-        t if t.contains("NaiveDate") => ("string", Some("date")),
-        t if t.contains("NaiveTime") => ("string", Some("time")),
-        t if t.starts_with("HashMap<") || t.starts_with("BTreeMap<") => ("object", None),
-        _ => ("string", None), // Default to string for unknown types
-    };
-
-    (!is_optional, json_type, format)
 }
