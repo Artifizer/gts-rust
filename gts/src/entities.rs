@@ -297,6 +297,9 @@ impl GtsEntity {
     /// There are two types of instances:
     /// 1. Well-known instances: id field contains a GTS ID (e.g., gts.x.core.events.topic.v1~x.commerce._.orders.v1.0)
     /// 2. Anonymous instances: id field contains a UUID, type field contains the GTS schema ID
+    ///
+    /// For `schema_id` resolution, explicit `type` field takes priority over the chain-derived schema.
+    /// This allows overriding the implicit parent schema from a chained ID.
     fn extract_instance_ids(&mut self, cfg: &GtsConfig) {
         // Only process if content is an object
         if self.content.as_object().is_none() {
@@ -313,25 +316,25 @@ impl GtsEntity {
                 self.gts_id = GtsID::new(id).ok();
                 self.instance_id = Some(id.clone());
 
+                // PRIORITY 1: Extract schema from chained ID (always takes priority)
                 // For well-known instances with CHAINED IDs (multiple segments),
-                // extract schema from the chain. A chained ID has more than one segment.
+                // extract schema from the chain. A chained ID has more than one
+                // segment.
                 // Example: gts.x.core.events.type.v1~abc.app._.custom_event.v1.2
                 //          has 2 segments, so schema_id = gts.x.core.events.type.v1~
                 // But: gts.v123.p456.n789.t000.v999.888~ has only 1 segment,
-                //      so we can't determine its schema (it IS a schema ID, not an instance)
+                //      so we can't determine its schema (it IS a schema ID)
                 if let Some(ref gts_id) = self.gts_id {
-                    // Only extract schema_id if there are multiple segments (a chain)
+                    // Only extract schema_id if there are multiple segments
                     if gts_id.gts_id_segments.len() > 1 {
-                        // Extract schema ID: everything up to and including the last ~
-                        // For a 2-segment chain, this gives us the first segment (the parent schema)
+                        // Extract schema ID: everything up to and including last ~
+                        // For a 2-segment chain, this gives first segment (parent)
                         if let Some(last_tilde) = gts_id.id.rfind('~') {
                             self.schema_id = Some(gts_id.id[..=last_tilde].to_string());
                             // Mark that schema_id was extracted from the id field
                             self.selected_schema_id_field = self.selected_entity_field.clone();
                         }
                     }
-                    // If it's a single-segment ID ending with ~, we can't determine the schema
-                    // (it looks like a schema ID but is being used as an instance ID - unusual case)
                 }
             } else {
                 // Anonymous instance: id is a UUID or other non-GTS identifier
@@ -340,7 +343,9 @@ impl GtsEntity {
             }
         }
 
-        // Get schema_id from type field (for anonymous instances) or other schema_id_fields
+        // PRIORITY 2: Fall back to explicit type field (only if no chain-derived)
+        // For anonymous instances or well-known instances without chained IDs,
+        // check for explicit type/gtsTid fields.
         if self.schema_id.is_none() {
             self.schema_id = self.get_type_field_value(cfg);
         }
