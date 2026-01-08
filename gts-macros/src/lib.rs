@@ -759,9 +759,8 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
             if field_type_str == *gp {
                 if let Some(ident) = &field.ident {
                     // Use serde rename if present, otherwise use the field identifier
-                    generic_field_name = Some(
-                        get_serde_rename(field).unwrap_or_else(|| ident.to_string()),
-                    );
+                    generic_field_name =
+                        Some(get_serde_rename(field).unwrap_or_else(|| ident.to_string()));
                     break;
                 }
             }

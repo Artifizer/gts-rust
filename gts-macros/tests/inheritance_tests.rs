@@ -2388,7 +2388,9 @@ mod tests {
 
             // Navigate to nested properties through field path
             let child_schema = &all_of[1];
-            let mut current = child_schema.get("properties").expect("Should have properties");
+            let mut current = child_schema
+                .get("properties")
+                .expect("Should have properties");
 
             for (i, field) in expected_field_path.iter().enumerate() {
                 let field_obj = current.get(*field);
@@ -2407,7 +2409,9 @@ mod tests {
             }
 
             // Now current should be the innermost field object, get its properties
-            let innermost_props = current.get("properties").expect("Innermost should have properties");
+            let innermost_props = current
+                .get("properties")
+                .expect("Innermost should have properties");
 
             // Verify expected properties exist
             for prop in expected_properties {
@@ -2427,7 +2431,9 @@ mod tests {
             );
 
             // Properties should be at root level
-            let props = schema.get("properties").expect("Base schema should have properties");
+            let props = schema
+                .get("properties")
+                .expect("Base schema should have properties");
             for prop in expected_properties {
                 assert!(
                     props.get(*prop).is_some(),
@@ -2486,13 +2492,18 @@ mod tests {
 
         // Generic type's own properties are at root level of allOf[1], not nested
         let child_schema = &all_of[1];
-        let props = child_schema.get("properties").expect("Should have properties");
+        let props = child_schema
+            .get("properties")
+            .expect("Should have properties");
 
         // Properties should be at root level (not nested under "payload")
         assert!(props.get("user_agent").is_some(), "Should have user_agent");
         assert!(props.get("user_id").is_some(), "Should have user_id");
         assert!(props.get("ip_address").is_some(), "Should have ip_address");
-        assert!(props.get("data").is_some(), "Should have data (generic field placeholder)");
+        assert!(
+            props.get("data").is_some(),
+            "Should have data (generic field placeholder)"
+        );
 
         // data should be a simple {"type": "object"} placeholder for the generic field
         assert_eq!(props["data"]["type"], "object");
@@ -2523,15 +2534,25 @@ mod tests {
 
         // Non-generic child's properties should be nested under parent's generic field ("data")
         let child_schema = &all_of[1];
-        let props = child_schema.get("properties").expect("Should have properties");
+        let props = child_schema
+            .get("properties")
+            .expect("Should have properties");
 
         // Should have "data" field (parent's generic field)
         let data_prop = props.get("data").expect("Should have data property");
-        let data_props = data_prop.get("properties").expect("data should have properties");
+        let data_props = data_prop
+            .get("properties")
+            .expect("data should have properties");
 
         // Verify PlaceOrderDataV1's properties are nested under "data"
-        assert!(data_props.get("order_id").is_some(), "data.properties should have order_id");
-        assert!(data_props.get("product_id").is_some(), "data.properties should have product_id");
+        assert!(
+            data_props.get("order_id").is_some(),
+            "data.properties should have order_id"
+        );
+        assert!(
+            data_props.get("product_id").is_some(),
+            "data.properties should have product_id"
+        );
 
         // Verify additionalProperties: false on nested data
         assert_eq!(
@@ -2604,7 +2625,9 @@ mod tests {
 
         // Second element should have properties nested under "config" (parent's generic field)
         let child_schema = &all_of[1];
-        let props = child_schema.get("properties").expect("Should have properties");
+        let props = child_schema
+            .get("properties")
+            .expect("Should have properties");
 
         // Should have "config" field (parent's generic field)
         let config_prop = props.get("config");
