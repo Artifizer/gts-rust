@@ -618,7 +618,8 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
     let input = parse_macro_input!(item as DeriveInput);
 
     // Prohibit multiple type generic parameters (GTS notation assumes nested segments)
-    if input.generics.type_params().count() > 1 {
+    let generic_count = input.generics.type_params().count();
+    if generic_count > 1 {
         return syn::Error::new_spanned(
             &input.ident,
             "struct_to_gts_schema: Multiple type generic parameters are not supported (GTS schemas assume nested segments)",
@@ -626,6 +627,11 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
         .to_compile_error()
         .into();
     }
+
+    // base = true can have 0 or 1 generic field:
+    // - 0 generics: This is a leaf/terminal type, no derived structs can extend it
+    // - 1 generic: Derived structs can extend via the generic field
+    // (validation that base = ParentStruct requires parent to have 1 generic is done later via compile-time assertion)
 
     // Parse properties list
     let property_names: Vec<String> = args
@@ -745,13 +751,16 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
     let mut generic_field_name: Option<String> = None;
 
     // Find the field that uses the generic type (only for structs with fields)
+    // Use the SERIALIZED name (serde rename if present, otherwise field ident)
     if let (Some(ref gp), Some(fields)) = (&generic_param_name, struct_fields) {
         for field in fields {
             let field_type = &field.ty;
             let field_type_str = quote::quote!(#field_type).to_string().replace(' ', "");
             if field_type_str == *gp {
                 if let Some(ident) = &field.ident {
-                    generic_field_name = Some(ident.to_string());
+                    // Use serde rename if present, otherwise use the field identifier
+                    generic_field_name =
+                        Some(get_serde_rename(field).unwrap_or_else(|| ident.to_string()));
                     break;
                 }
             }
@@ -795,8 +804,12 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
             let parent_id = expected_parent_schema_id
                 .as_ref()
                 .expect("parent_id must exist when base is specified");
-            let assertion_msg = format!(
+            let schema_id_assertion_msg = format!(
                 "struct_to_gts_schema: Base struct '{parent_ident}' schema ID must match parent segment '{parent_id}' from schema_id"
+            );
+            let generic_field_assertion_msg = format!(
+                "struct_to_gts_schema: Base struct '{parent_ident}' must have exactly 1 generic field. \
+                 Parent types must define a generic field (e.g., `pub payload: P`) that child types extend."
             );
             quote! {
                 // Compile-time assertion: verify parent struct's GTS_SCHEMA_ID matches expected parent segment
@@ -809,16 +822,24 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
                     const _: () = {
                         // Manual string equality check for const context
                         if PARENT_ID.as_bytes().len() != EXPECTED_ID.as_bytes().len() {
-                            panic!(#assertion_msg);
+                            panic!(#schema_id_assertion_msg);
                         }
                         let mut i = 0;
                         while i < PARENT_ID.as_bytes().len() {
                             if PARENT_ID.as_bytes()[i] != EXPECTED_ID.as_bytes()[i] {
-                                panic!(#assertion_msg);
+                                panic!(#schema_id_assertion_msg);
                             }
                             i += 1;
                         }
                     };
+                };
+
+                // Compile-time assertion: verify parent struct has exactly 1 generic field
+                const _: () = {
+                    const PARENT_GENERIC_FIELD: Option<&'static str> = <#parent_ident<()> as ::gts::GtsSchema>::GENERIC_FIELD;
+                    if PARENT_GENERIC_FIELD.is_none() {
+                        panic!(#generic_field_assertion_msg);
+                    }
                 };
             }
         }
@@ -984,6 +1005,22 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
             }
         }
     } else {
+        // For non-generic child types extending a generic base, we need to get the parent's
+        // generic field name at compile time to properly nest the child properties
+        let parent_generic_field_code = match &args.base {
+            BaseAttr::Parent(parent_ident) => {
+                quote! {
+                    // Get the parent's generic field name for nesting
+                    let parent_generic_field: Option<&'static str> = <#parent_ident<()> as ::gts::GtsSchema>::GENERIC_FIELD;
+                }
+            }
+            BaseAttr::IsBase => {
+                quote! {
+                    let parent_generic_field: Option<&'static str> = None;
+                }
+            }
+        };
+
         quote! {
             fn gts_schema() -> serde_json::Value {
                 Self::gts_schema_with_refs()
@@ -1033,8 +1070,16 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
                     return schema;
                 }
 
+                // Get the parent's generic field name for nesting child properties
+                #parent_generic_field_code
+
                 // Child type - use allOf with $ref to parent
-                // Non-generic child types have additionalProperties: false in their own properties section
+                // Parent MUST have a generic field - this is enforced by compile-time assertion
+                let field_name = parent_generic_field
+                    .expect("Parent struct must have a generic field for derived types to extend");
+
+                // Wrap properties in the parent's generic field path
+                let nested_properties = Self::wrap_in_nesting_path(&[field_name], properties, required, None);
                 serde_json::json!({
                     "$id": format!("gts://{}", schema_id),
                     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1043,9 +1088,7 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
                         { "$ref": format!("gts://{}", parent_schema_id) },
                         {
                             "type": "object",
-                            "additionalProperties": false,
-                            "properties": properties,
-                            "required": required
+                            "properties": nested_properties
                         }
                     ]
                 })

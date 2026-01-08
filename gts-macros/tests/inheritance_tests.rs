@@ -188,6 +188,37 @@ pub struct TopicV1<P> {
 pub struct OrderTopicConfigV1;
 
 /* ============================================================
+Test serde rename on generic field - the serialized name should be used
+============================================================ */
+
+#[struct_to_gts_schema(
+    dir_path = "schemas",
+    base = true,
+    schema_id = "gts.x.core.events.container.v1~",
+    description = "Container with renamed generic field",
+    properties = "id,name,rust_field_name"
+)]
+#[derive(Debug)]
+pub struct ContainerV1<T> {
+    pub id: GtsInstanceId,
+    pub name: String,
+    #[serde(rename = "inner_data")]
+    pub rust_field_name: T,
+}
+
+#[struct_to_gts_schema(
+    dir_path = "schemas",
+    base = ContainerV1,
+    schema_id = "gts.x.core.events.container.v1~x.app.content.v1~",
+    description = "Content extending container",
+    properties = "content_value"
+)]
+#[derive(Debug)]
+pub struct ContentV1 {
+    pub content_value: String,
+}
+
+/* ============================================================
 The macro automatically generates:
 - GTS_SCHEMA_JSON constants with proper allOf inheritance
 - GTS_SCHEMA_ID constants
@@ -1649,6 +1680,7 @@ mod tests {
     #[test]
     fn test_two_level_inheritance_schema_structure() {
         // Verify SimplePayloadV1 schema has correct allOf inheritance
+        // Child properties should be nested under the parent's generic field (payload)
         let schema = SimplePayloadV1::gts_schema_with_refs();
 
         // Should have $id
@@ -1667,26 +1699,34 @@ mod tests {
         let first = &all_of[0];
         assert_eq!(first["$ref"], "gts://gts.x.core.events.type.v1~");
 
-        // Second element should have properties for SimplePayloadV1's own fields
+        // Second element should have properties nested under "payload"
+        // (the parent's generic field)
         let second = &all_of[1];
         let props = second.get("properties").expect("Should have properties");
+
+        // Properties should be nested under "payload" (parent's generic field)
+        let payload_prop = props.get("payload").expect("Should have payload property");
+        let payload_props = payload_prop
+            .get("properties")
+            .expect("payload should have properties");
+
         assert!(
-            props.get("message").is_some(),
-            "Should have message property"
+            payload_props.get("message").is_some(),
+            "Should have message property nested under payload"
         );
         assert!(
-            props.get("severity").is_some(),
-            "Should have severity property"
+            payload_props.get("severity").is_some(),
+            "Should have severity property nested under payload"
         );
 
-        // Should NOT have BaseEventV1 fields directly in properties
+        // Should NOT have BaseEventV1 fields or child fields at root level
         assert!(
             props.get("type").is_none(),
             "Should NOT have type in own properties"
         );
         assert!(
-            props.get("payload").is_none(),
-            "Should NOT have payload in own properties"
+            props.get("message").is_none(),
+            "Should NOT have message at root level - should be nested under payload"
         );
     }
 
@@ -2210,6 +2250,505 @@ mod tests {
         assert!(
             event_json["payload"].get("order_id").is_none(),
             "order_id should be in payload.data, not payload"
+        );
+    }
+
+    // =============================================================================
+    // Test for non-generic child extending generic base - schema nesting issue
+    // =============================================================================
+
+    /// This test validates that non-generic child types extending generic base types
+    /// have their properties correctly nested under the parent's generic field path.
+    ///
+    /// For example, if `BaseEventV1<P>` has a `payload: P` field, and `SimplePayloadV1`
+    /// extends it with `message` and `severity` fields, the schema should nest these
+    /// under `payload`, not at the root level.
+    ///
+    /// Instance JSON structure:
+    /// ```json
+    /// {
+    ///   "type": "...",
+    ///   "id": "...",
+    ///   "payload": {
+    ///     "message": "...",
+    ///     "severity": 3
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// Schema should have:
+    /// ```json
+    /// {
+    ///   "allOf": [
+    ///     { "$ref": "gts://gts.x.core.events.type.v1~" },
+    ///     {
+    ///       "properties": {
+    ///         "payload": {
+    ///           "properties": {
+    ///             "message": { "type": "string" },
+    ///             "severity": { "type": "integer" }
+    ///           }
+    ///         }
+    ///       }
+    ///     }
+    ///   ]
+    /// }
+    /// ```
+    #[test]
+    fn test_non_generic_child_schema_nests_properties_under_parent_generic_field() {
+        // Register schemas
+        let mut ops = gts::GtsOps::new(None, None, 0);
+        register_two_level_event_schemas(&mut ops);
+
+        // Create a valid instance
+        let event = BaseEventV1 {
+            event_type: SimplePayloadV1::gts_schema_id().clone(),
+            id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+            tenant_id: Uuid::parse_str("660e8400-e29b-41d4-a716-446655440000").unwrap(),
+            sequence_id: 100,
+            payload: SimplePayloadV1 {
+                message: "System started".to_string(),
+                severity: 3,
+            },
+        };
+
+        let event_json = serde_json::to_value(&event).unwrap();
+
+        // The instance has payload.message and payload.severity (nested)
+        assert!(event_json["payload"]["message"].is_string());
+        assert!(event_json["payload"]["severity"].is_number());
+
+        // Get the SimplePayloadV1 schema
+        let schema = SimplePayloadV1::gts_schema_with_refs();
+        println!(
+            "SimplePayloadV1 schema:\n{}",
+            serde_json::to_string_pretty(&schema).unwrap()
+        );
+
+        // The schema's allOf[1] should have properties nested under "payload"
+        // to match the instance structure
+        let all_of = schema.get("allOf").expect("Should have allOf");
+        let child_schema = &all_of[1];
+        let props = child_schema
+            .get("properties")
+            .expect("Should have properties");
+
+        // EXPECTED BEHAVIOR: properties should be nested under "payload"
+        // because BaseEventV1 has a generic field "payload: P"
+        let payload_prop = props.get("payload");
+        assert!(
+            payload_prop.is_some(),
+            "Child schema should nest properties under 'payload' field. \
+             Got properties: {}",
+            serde_json::to_string_pretty(&props).unwrap()
+        );
+
+        // The nested payload should have the child's properties
+        let payload_props = payload_prop
+            .unwrap()
+            .get("properties")
+            .expect("payload should have properties");
+        assert!(
+            payload_props.get("message").is_some(),
+            "payload.properties should have 'message'"
+        );
+        assert!(
+            payload_props.get("severity").is_some(),
+            "payload.properties should have 'severity'"
+        );
+    }
+
+    // =============================================================================
+    // Schema field path validation for all nested schemas
+    // =============================================================================
+
+    /// Helper function to verify schema nesting structure and field paths
+    fn verify_schema_field_path(
+        schema: &serde_json::Value,
+        expected_id: &str,
+        expected_parent_ref: Option<&str>,
+        expected_field_path: &[&str],
+        expected_properties: &[&str],
+    ) {
+        // Verify $id
+        assert_eq!(
+            schema["$id"],
+            format!("gts://{}", expected_id),
+            "Schema $id mismatch"
+        );
+
+        if let Some(parent_ref) = expected_parent_ref {
+            // Child schema - should have allOf
+            let all_of = schema.get("allOf").expect("Child schema should have allOf");
+            assert_eq!(
+                all_of[0]["$ref"],
+                format!("gts://{}", parent_ref),
+                "allOf $ref should point to parent"
+            );
+
+            // Navigate to nested properties through field path
+            let child_schema = &all_of[1];
+            let mut current = child_schema
+                .get("properties")
+                .expect("Should have properties");
+
+            for (i, field) in expected_field_path.iter().enumerate() {
+                let field_obj = current.get(*field);
+                assert!(
+                    field_obj.is_some(),
+                    "Missing field '{}' at path level {} in schema. Got: {}",
+                    field,
+                    i,
+                    serde_json::to_string_pretty(&current).unwrap()
+                );
+                current = field_obj.unwrap();
+                if i < expected_field_path.len() - 1 {
+                    // Not the last field, navigate to its properties
+                    current = current.get("properties").unwrap_or(current);
+                }
+            }
+
+            // Now current should be the innermost field object, get its properties
+            let innermost_props = current
+                .get("properties")
+                .expect("Innermost should have properties");
+
+            // Verify expected properties exist
+            for prop in expected_properties {
+                assert!(
+                    innermost_props.get(*prop).is_some(),
+                    "Missing property '{}' in nested schema at path {:?}. Got: {}",
+                    prop,
+                    expected_field_path,
+                    serde_json::to_string_pretty(&innermost_props).unwrap()
+                );
+            }
+        } else {
+            // Base schema - should NOT have allOf
+            assert!(
+                schema.get("allOf").is_none(),
+                "Base schema should not have allOf"
+            );
+
+            // Properties should be at root level
+            let props = schema
+                .get("properties")
+                .expect("Base schema should have properties");
+            for prop in expected_properties {
+                assert!(
+                    props.get(*prop).is_some(),
+                    "Missing property '{}' in base schema. Got: {}",
+                    prop,
+                    serde_json::to_string_pretty(&props).unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_base_event_v1_schema_field_path() {
+        // BaseEventV1 is a base type - properties at root level
+        let schema = BaseEventV1::<()>::gts_schema_with_refs();
+        println!(
+            "BaseEventV1 schema:\n{}",
+            serde_json::to_string_pretty(&schema).unwrap()
+        );
+
+        verify_schema_field_path(
+            &schema,
+            "gts.x.core.events.type.v1~",
+            None, // No parent
+            &[],  // No nesting path
+            &["type", "id", "tenant_id", "sequence_id", "payload"],
+        );
+
+        // Verify additionalProperties: false at root
+        assert_eq!(
+            schema["additionalProperties"], false,
+            "Base schema should have additionalProperties: false"
+        );
+    }
+
+    #[test]
+    fn test_audit_payload_v1_schema_field_path() {
+        // AuditPayloadV1<()> is a GENERIC type - its own properties are at root level in allOf[1]
+        // (not nested under parent's generic field)
+        // Only non-generic children nest under parent's generic field
+        let schema = AuditPayloadV1::<()>::gts_schema_with_refs();
+        println!(
+            "AuditPayloadV1 schema:\n{}",
+            serde_json::to_string_pretty(&schema).unwrap()
+        );
+
+        // Verify $id
+        assert_eq!(
+            schema["$id"],
+            "gts://gts.x.core.events.type.v1~x.core.audit.event.v1~"
+        );
+
+        // Should have allOf with parent reference
+        let all_of = schema.get("allOf").expect("Should have allOf");
+        assert_eq!(all_of[0]["$ref"], "gts://gts.x.core.events.type.v1~");
+
+        // Generic type's own properties are at root level of allOf[1], not nested
+        let child_schema = &all_of[1];
+        let props = child_schema
+            .get("properties")
+            .expect("Should have properties");
+
+        // Properties should be at root level (not nested under "payload")
+        assert!(props.get("user_agent").is_some(), "Should have user_agent");
+        assert!(props.get("user_id").is_some(), "Should have user_id");
+        assert!(props.get("ip_address").is_some(), "Should have ip_address");
+        assert!(
+            props.get("data").is_some(),
+            "Should have data (generic field placeholder)"
+        );
+
+        // data should be a simple {"type": "object"} placeholder for the generic field
+        assert_eq!(props["data"]["type"], "object");
+    }
+
+    #[test]
+    fn test_place_order_data_v1_schema_field_path() {
+        // PlaceOrderDataV1 is a NON-GENERIC child extending AuditPayloadV1
+        // Its properties should be nested under "data" (AuditPayloadV1's generic field)
+        let schema = PlaceOrderDataV1::gts_schema_with_refs();
+        println!(
+            "PlaceOrderDataV1 schema:\n{}",
+            serde_json::to_string_pretty(&schema).unwrap()
+        );
+
+        // Verify $id
+        assert_eq!(
+            schema["$id"],
+            "gts://gts.x.core.events.type.v1~x.core.audit.event.v1~x.marketplace.orders.purchase.v1~"
+        );
+
+        // Should have allOf with parent reference
+        let all_of = schema.get("allOf").expect("Should have allOf");
+        assert_eq!(
+            all_of[0]["$ref"],
+            "gts://gts.x.core.events.type.v1~x.core.audit.event.v1~"
+        );
+
+        // Non-generic child's properties should be nested under parent's generic field ("data")
+        let child_schema = &all_of[1];
+        let props = child_schema
+            .get("properties")
+            .expect("Should have properties");
+
+        // Should have "data" field (parent's generic field)
+        let data_prop = props.get("data").expect("Should have data property");
+        let data_props = data_prop
+            .get("properties")
+            .expect("data should have properties");
+
+        // Verify PlaceOrderDataV1's properties are nested under "data"
+        assert!(
+            data_props.get("order_id").is_some(),
+            "data.properties should have order_id"
+        );
+        assert!(
+            data_props.get("product_id").is_some(),
+            "data.properties should have product_id"
+        );
+
+        // Verify additionalProperties: false on nested data
+        assert_eq!(
+            data_prop["additionalProperties"], false,
+            "Nested data should have additionalProperties: false"
+        );
+    }
+
+    #[test]
+    fn test_simple_payload_v1_schema_field_path() {
+        // SimplePayloadV1 extends BaseEventV1 - properties nested under "payload"
+        let schema = SimplePayloadV1::gts_schema_with_refs();
+        println!(
+            "SimplePayloadV1 schema:\n{}",
+            serde_json::to_string_pretty(&schema).unwrap()
+        );
+
+        verify_schema_field_path(
+            &schema,
+            "gts.x.core.events.type.v1~x.core.simple.event.v1~",
+            Some("gts.x.core.events.type.v1~"),
+            &["payload"], // Properties nested under "payload"
+            &["message", "severity"],
+        );
+    }
+
+    #[test]
+    fn test_topic_v1_schema_field_path() {
+        // TopicV1 is a base type - properties at root level
+        let schema = TopicV1::<()>::gts_schema_with_refs();
+        println!(
+            "TopicV1 schema:\n{}",
+            serde_json::to_string_pretty(&schema).unwrap()
+        );
+
+        verify_schema_field_path(
+            &schema,
+            "gts.x.core.events.topic.v1~",
+            None, // No parent
+            &[],  // No nesting path
+            &["name", "description"],
+        );
+
+        // Verify additionalProperties: false at root
+        assert_eq!(
+            schema["additionalProperties"], false,
+            "Base schema should have additionalProperties: false"
+        );
+    }
+
+    #[test]
+    fn test_order_topic_config_v1_schema_field_path() {
+        // OrderTopicConfigV1 is a unit struct extending TopicV1
+        // It has no properties of its own, but should still have proper nesting structure
+        let schema = OrderTopicConfigV1::gts_schema_with_refs();
+        println!(
+            "OrderTopicConfigV1 schema:\n{}",
+            serde_json::to_string_pretty(&schema).unwrap()
+        );
+
+        // Verify $id
+        assert_eq!(
+            schema["$id"],
+            "gts://gts.x.core.events.topic.v1~x.commerce.orders.topic.v1~"
+        );
+
+        // Should have allOf with parent reference
+        let all_of = schema.get("allOf").expect("Should have allOf");
+        assert_eq!(all_of[0]["$ref"], "gts://gts.x.core.events.topic.v1~");
+
+        // Second element should have properties nested under "config" (parent's generic field)
+        let child_schema = &all_of[1];
+        let props = child_schema
+            .get("properties")
+            .expect("Should have properties");
+
+        // Should have "config" field (parent's generic field)
+        let config_prop = props.get("config");
+        assert!(
+            config_prop.is_some(),
+            "Unit struct child should nest under parent's generic field 'config'. Got: {}",
+            serde_json::to_string_pretty(&props).unwrap()
+        );
+
+        // Config should have additionalProperties: false (empty object with no extra fields allowed)
+        let config = config_prop.unwrap();
+        assert_eq!(
+            config["additionalProperties"], false,
+            "Nested config should have additionalProperties: false"
+        );
+    }
+
+    #[test]
+    fn test_all_nested_schemas_have_additional_properties_false() {
+        // Verify all nested schemas have additionalProperties: false at the correct level
+        // Note: Generic types (like AuditPayloadV1<()>) have properties at root level of allOf[1],
+        // only non-generic children nest under parent's generic field
+
+        // Non-generic child: SimplePayloadV1 (extends BaseEventV1)
+        // Properties nested under "payload" (parent's generic field)
+        let simple_schema = SimplePayloadV1::gts_schema_with_refs();
+        let simple_payload = &simple_schema["allOf"][1]["properties"]["payload"];
+        assert_eq!(
+            simple_payload["additionalProperties"], false,
+            "SimplePayloadV1 nested payload should have additionalProperties: false"
+        );
+
+        // Generic type: AuditPayloadV1<()> - properties at root level of allOf[1]
+        // The "data" field is a generic placeholder, not a nested child
+        // So we don't check for additionalProperties on root level (it's not there for generic types)
+        let audit_schema = AuditPayloadV1::<()>::gts_schema_with_refs();
+        let audit_props = &audit_schema["allOf"][1]["properties"];
+        // Verify "data" is a simple placeholder (no additionalProperties)
+        assert_eq!(
+            audit_props["data"]["type"], "object",
+            "AuditPayloadV1 data field should be a simple object placeholder"
+        );
+
+        // Non-generic child: PlaceOrderDataV1 (extends AuditPayloadV1)
+        // Properties nested under "data" (parent's generic field)
+        let order_schema = PlaceOrderDataV1::gts_schema_with_refs();
+        let order_data = &order_schema["allOf"][1]["properties"]["data"];
+        assert_eq!(
+            order_data["additionalProperties"], false,
+            "PlaceOrderDataV1 nested data should have additionalProperties: false"
+        );
+
+        // Unit struct: OrderTopicConfigV1 (extends TopicV1)
+        // Properties nested under "config" (parent's generic field)
+        let topic_schema = OrderTopicConfigV1::gts_schema_with_refs();
+        let topic_config = &topic_schema["allOf"][1]["properties"]["config"];
+        assert_eq!(
+            topic_config["additionalProperties"], false,
+            "OrderTopicConfigV1 nested config should have additionalProperties: false"
+        );
+    }
+
+    #[test]
+    fn test_serde_rename_generic_field_uses_serialized_name() {
+        // ContainerV1 has a generic field `rust_field_name` with #[serde(rename = "inner_data")]
+        // The schema should use "inner_data" (serialized name), not "rust_field_name"
+
+        // Verify ContainerV1 base schema uses the serialized name
+        let container_schema = ContainerV1::<()>::gts_schema_with_refs();
+        println!(
+            "ContainerV1 schema:\n{}",
+            serde_json::to_string_pretty(&container_schema).unwrap()
+        );
+
+        // The generic field should be named "inner_data" in the schema (serde rename)
+        let props = container_schema
+            .get("properties")
+            .expect("Should have properties");
+        assert!(
+            props.get("inner_data").is_some(),
+            "Schema should use serialized name 'inner_data', not Rust field name 'rust_field_name'. Got: {}",
+            serde_json::to_string_pretty(&props).unwrap()
+        );
+        assert!(
+            props.get("rust_field_name").is_none(),
+            "Schema should NOT have Rust field name 'rust_field_name'"
+        );
+
+        // Verify ContentV1 child schema nests under "inner_data" (serialized name)
+        let content_schema = ContentV1::gts_schema_with_refs();
+        println!(
+            "ContentV1 schema:\n{}",
+            serde_json::to_string_pretty(&content_schema).unwrap()
+        );
+
+        // Child properties should be nested under "inner_data" (parent's serialized generic field name)
+        let all_of = content_schema.get("allOf").expect("Should have allOf");
+        let child_props = all_of[1].get("properties").expect("Should have properties");
+
+        // Should have "inner_data" field (parent's serialized generic field name)
+        let inner_data = child_props.get("inner_data");
+        assert!(
+            inner_data.is_some(),
+            "Child schema should nest under 'inner_data' (serialized name). Got: {}",
+            serde_json::to_string_pretty(&child_props).unwrap()
+        );
+
+        // Should NOT have "rust_field_name"
+        assert!(
+            child_props.get("rust_field_name").is_none(),
+            "Child schema should NOT use Rust field name 'rust_field_name'"
+        );
+
+        // Verify the nested properties contain the child's fields
+        let inner_props = inner_data
+            .unwrap()
+            .get("properties")
+            .expect("inner_data should have properties");
+        assert!(
+            inner_props.get("content_value").is_some(),
+            "inner_data.properties should have 'content_value'"
         );
     }
 }

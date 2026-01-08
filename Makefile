@@ -57,7 +57,7 @@ coverage:
 
 # Update gts-spec submodule to latest
 update-spec:
-	git submodule update --remote .gts-spec
+	git submodule update --init --remote .gts-spec
 
 # Run end-to-end tests against gts-spec
 e2e: build
