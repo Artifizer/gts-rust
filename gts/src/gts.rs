@@ -658,7 +658,7 @@ impl<'de> serde::Deserialize<'de> for GtsInstanceId {
 
 impl schemars::JsonSchema for GtsInstanceId {
     fn schema_name() -> std::borrow::Cow<'static, str> {
-        "GtsInstanceId".into()
+        std::borrow::Cow::Borrowed("GtsInstanceId")
     }
 
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
@@ -818,7 +818,7 @@ impl<'de> serde::Deserialize<'de> for GtsSchemaId {
 
 impl schemars::JsonSchema for GtsSchemaId {
     fn schema_name() -> std::borrow::Cow<'static, str> {
-        "GtsSchemaId".into()
+        std::borrow::Cow::Borrowed("GtsSchemaId")
     }
 
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
