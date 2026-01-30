@@ -1,11 +1,70 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
 use crate::entities::GtsEntity;
 use crate::gts::{GTS_URI_PREFIX, GtsID, GtsWildcard};
 use crate::schema_cast::GtsEntityCastResult;
+
+/// Custom retriever for resolving gts:// URI scheme references in JSON Schema validation
+struct GtsRetriever {
+    store: Arc<RwLock<HashMap<String, Value>>>,
+}
+
+impl GtsRetriever {
+    fn new(store_map: &HashMap<String, GtsEntity>) -> Self {
+        let mut schemas = HashMap::new();
+
+        // Pre-populate with all schemas from the store
+        for (id, entity) in store_map {
+            if entity.is_schema {
+                // Store with gts:// URI format
+                let uri = format!("{GTS_URI_PREFIX}{id}");
+                schemas.insert(uri, entity.content.clone());
+            }
+        }
+
+        Self {
+            store: Arc::new(RwLock::new(schemas)),
+        }
+    }
+}
+
+impl jsonschema::Retrieve for GtsRetriever {
+    #[allow(clippy::cognitive_complexity)]
+    fn retrieve(
+        &self,
+        uri: &jsonschema::Uri<String>,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+        let uri_str = uri.as_str();
+
+        tracing::debug!("GtsRetriever: Attempting to retrieve URI: {uri_str}");
+
+        // Only handle gts:// URIs
+        if !uri_str.starts_with(GTS_URI_PREFIX) {
+            tracing::warn!("GtsRetriever: Unknown scheme for URI: {uri_str}");
+            return Err(format!("Unknown scheme for URI: {uri_str}").into());
+        }
+
+        let store = self.store.read().map_err(|e| format!("Lock error: {e}"))?;
+
+        tracing::debug!("GtsRetriever: Store contains {} schemas", store.len());
+
+        if let Some(schema) = store.get(uri_str) {
+            tracing::debug!("GtsRetriever: Successfully retrieved schema for {uri_str}");
+            Ok(schema.clone())
+        } else {
+            tracing::warn!("GtsRetriever: Schema not found: {uri_str}");
+            tracing::debug!(
+                "GtsRetriever: Available URIs: {:?}",
+                store.keys().collect::<Vec<_>>()
+            );
+            Err(format!("Schema not found: {uri_str}").into())
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -178,6 +237,26 @@ impl GtsStore {
         match schema {
             Value::Object(map) => {
                 if let Some(Value::String(ref_uri)) = map.get("$ref") {
+                    // Handle internal JSON Schema references like #/$defs/GtsInstanceId
+                    // These should be inlined to match schemars 0.8 behavior (is_referenceable=false)
+                    match ref_uri.as_str() {
+                        "#/$defs/GtsInstanceId" => {
+                            return crate::GtsInstanceId::json_schema_value();
+                        }
+                        "#/$defs/GtsSchemaId" => {
+                            return crate::GtsSchemaId::json_schema_value();
+                        }
+                        s if s.starts_with("#/") => {
+                            // Other internal references - keep as-is
+                            let mut new_map = serde_json::Map::new();
+                            for (k, v) in map {
+                                new_map.insert(k.clone(), self.resolve_schema_refs(v));
+                            }
+                            return Value::Object(new_map);
+                        }
+                        _ => {} // Fall through to external ref handling
+                    }
+
                     // Normalize the ref: strip gts:// prefix to get canonical GTS ID
                     let canonical_ref = ref_uri.strip_prefix(GTS_URI_PREFIX).unwrap_or(ref_uri);
 
@@ -189,6 +268,7 @@ impl GtsStore {
                         let mut resolved = self.resolve_schema_refs(&entity.content);
 
                         // Remove $id and $schema from resolved content to avoid URL resolution issues
+                        // Note: $defs for GtsInstanceId/GtsSchemaId are inlined during resolution (see match above)
                         if let Value::Object(ref mut resolved_map) = resolved {
                             resolved_map.remove("$id");
                             resolved_map.remove("$schema");
@@ -235,11 +315,11 @@ impl GtsStore {
 
                         match resolved_item {
                             Value::Object(ref item_map) => {
-                                // If this is a resolved schema (no $ref), merge its properties
+                                // If this item still has a $ref, keep it in allOf
                                 if item_map.contains_key("$ref") {
-                                    // Keep items that still have $ref (couldn't be resolved)
                                     resolved_all_of.push(resolved_item);
                                 } else {
+                                    // Merge properties and required fields from resolved items
                                     if let Some(Value::Object(props_map)) =
                                         item_map.get("properties")
                                     {
@@ -477,18 +557,31 @@ impl GtsStore {
         // crate doesn't understand them and will fail on JSON Pointer references
         let mut schema_for_validation = Self::remove_x_gts_ref_fields(&schema_content);
 
-        // Also remove $id and $schema to avoid URL resolution issues
-        if let Value::Object(ref mut map) = schema_for_validation {
-            map.remove("$id");
-            map.remove("$schema");
-        }
+        // Check if schema contains gts:// references
+        let has_gts_refs = schema_for_validation.to_string().contains("gts://");
 
-        // For now, we'll do a basic validation by trying to compile the schema
-        jsonschema::JSONSchema::compile(&schema_for_validation).map_err(|e| {
-            StoreError::ValidationError(format!(
-                "JSON Schema validation failed for '{gts_id}': {e}"
-            ))
-        })?;
+        if has_gts_refs {
+            // Skip jsonschema compilation for schemas with gts:// references during registration
+            // This allows forward references (schemas referencing other schemas that don't exist yet)
+            // Full validation with reference resolution will happen during instance validation
+            tracing::debug!(
+                "Schema {} contains gts:// references, skipping compilation during registration",
+                gts_id
+            );
+        } else {
+            // For schemas without gts:// references, validate the structure
+            // Remove $id and $schema to avoid URL resolution issues
+            if let Value::Object(ref mut map) = schema_for_validation {
+                map.remove("$id");
+                map.remove("$schema");
+            }
+
+            jsonschema::validator_for(&schema_for_validation).map_err(|e| {
+                StoreError::ValidationError(format!(
+                    "JSON Schema validation failed for '{gts_id}': {e}"
+                ))
+            })?;
+        }
 
         tracing::info!(
             "Schema {} passed JSON Schema meta-schema validation",
@@ -524,27 +617,39 @@ impl GtsStore {
             schema_id
         );
 
-        // Resolve all $ref references in the schema by inlining them
-        let mut resolved_schema = self.resolve_schema_refs(&schema);
-
-        // Remove $id and $schema from the top-level schema to avoid URL resolution issues
-        if let Value::Object(ref mut map) = resolved_schema {
-            map.remove("$id");
-            map.remove("$schema");
-        }
+        // Resolve internal #/ references (like #/$defs/GtsInstanceId) by inlining them
+        // This handles the compile-time inlining of GtsInstanceId and GtsSchemaId
+        let schema_with_internal_refs_resolved = self.resolve_schema_refs(&schema);
 
         tracing::debug!(
-            "Resolved schema: {}",
-            serde_json::to_string_pretty(&resolved_schema).unwrap_or_default()
+            "Schema for validation: {}",
+            serde_json::to_string_pretty(&schema_with_internal_refs_resolved).unwrap_or_default()
         );
 
-        let compiled = jsonschema::JSONSchema::compile(&resolved_schema).map_err(|e| {
-            tracing::error!("Schema compilation error: {}", e);
-            StoreError::ValidationError(format!("Invalid schema: {e}"))
-        })?;
+        // Create custom retriever for gts:// URI resolution
+        let retriever = GtsRetriever::new(&self.by_id);
 
-        compiled.validate(&obj.content).map_err(|e| {
-            let errors: Vec<String> = e.map(|err| err.to_string()).collect();
+        // Build validator with custom retriever to handle gts:// references
+        // Internal #/ references have already been resolved by resolve_schema_refs
+        // The retriever will resolve any $ref to gts:// URIs automatically
+        let validator = jsonschema::options()
+            .with_retriever(retriever)
+            .build(&schema_with_internal_refs_resolved)
+            .map_err(|e| {
+                tracing::error!("Schema compilation error: {}", e);
+                StoreError::ValidationError(format!(
+                    "Invalid schema: {e}\nContent: {}\nSchema: {}",
+                    serde_json::to_string_pretty(&obj.content).unwrap_or_default(),
+                    serde_json::to_string_pretty(&schema_with_internal_refs_resolved)
+                        .unwrap_or_default()
+                ))
+            })?;
+
+        validator.validate(&obj.content).map_err(|_| {
+            let errors: Vec<String> = validator
+                .iter_errors(&obj.content)
+                .map(|err| err.to_string())
+                .collect();
             StoreError::ValidationError(format!("Validation failed: {}", errors.join(", ")))
         })?;
 
