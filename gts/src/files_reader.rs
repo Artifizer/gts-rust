@@ -105,8 +105,7 @@ impl GtsFileReader {
         let value: Value = match extension.as_str() {
             "yaml" | "yml" => {
                 // Parse YAML and convert to JSON
-                let yaml_value: serde_yaml::Value = serde_yaml::from_str(&content)?;
-                serde_json::to_value(yaml_value)?
+                serde_saphyr::from_str(&content)?
             }
             _ => {
                 // Default: parse as JSON

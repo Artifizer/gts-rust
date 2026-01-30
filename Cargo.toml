@@ -175,4 +175,4 @@ schemars = { version = "1.2", features = ["uuid1"] }
 walkdir = "2.5"
 
 # Format parsing
-serde_yaml = "0.9"
+serde-saphyr = "0.0.10"
