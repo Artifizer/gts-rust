@@ -565,7 +565,7 @@ mod tests {
             GtsIdError::Id { cause, .. } => {
                 assert!(cause.contains("must start with 'gts.'"), "got: {cause}");
             }
-            _ => panic!("expected Id error, got: {err}"),
+            GtsIdError::Segment { .. } => panic!("expected Id error, got: {err}"),
         }
     }
 
@@ -576,7 +576,7 @@ mod tests {
             GtsIdError::Id { cause, .. } => {
                 assert!(cause.contains("lowercase"), "got: {cause}");
             }
-            _ => panic!("expected Id error, got: {err}"),
+            GtsIdError::Segment { .. } => panic!("expected Id error, got: {err}"),
         }
     }
 
@@ -587,7 +587,7 @@ mod tests {
             GtsIdError::Id { cause, .. } => {
                 assert!(cause.contains("'-'"), "got: {cause}");
             }
-            _ => panic!("expected Id error, got: {err}"),
+            GtsIdError::Segment { .. } => panic!("expected Id error, got: {err}"),
         }
     }
 
@@ -610,7 +610,7 @@ mod tests {
                     "got: {cause}"
                 );
             }
-            _ => panic!("expected Segment error, got: {err}"),
+            GtsIdError::Id { .. } => panic!("expected Segment error, got: {err}"),
         }
     }
 
