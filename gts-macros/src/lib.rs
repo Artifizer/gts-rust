@@ -459,7 +459,32 @@ impl Parse for GtsSchemaArgs {
                 }
                 "schema_id" => {
                     let value: LitStr = input.parse()?;
-                    schema_id = Some(value.value());
+                    let id = value.value();
+                    // Schema-specific check: must end with ~
+                    if !id.ends_with('~') {
+                        return Err(syn::Error::new_spanned(
+                            value,
+                            format!(
+                                "struct_to_gts_schema: Invalid GTS schema ID: must end with '~' (type marker), got '{id}'"
+                            ),
+                        ));
+                    }
+                    // General GTS ID validation via shared crate
+                    if let Err(e) = gts_id::validate_gts_id(&id, false) {
+                        let msg = match &e {
+                            gts_id::GtsIdError::Id { cause, .. } => {
+                                format!("Invalid GTS schema ID: {cause}")
+                            }
+                            gts_id::GtsIdError::Segment { num, cause, .. } => {
+                                format!("Segment #{num}: {cause}")
+                            }
+                        };
+                        return Err(syn::Error::new_spanned(
+                            value,
+                            format!("struct_to_gts_schema: {msg}"),
+                        ));
+                    }
+                    schema_id = Some(id);
                 }
                 "description" => {
                     let value: LitStr = input.parse()?;
