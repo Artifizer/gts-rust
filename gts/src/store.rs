@@ -828,27 +828,26 @@ impl GtsStore {
             crate::schema_traits::collect_trait_schema_from_value(&content, &mut trait_schemas);
             let mut level_schema_props = std::collections::HashSet::new();
             for ts in &trait_schemas[prev_schema_count..] {
-                if let Some(obj) = ts.as_object() {
-                    if let Some(serde_json::Value::Object(props)) = obj.get("properties") {
-                        for (prop_name, prop_schema) in props {
-                            level_schema_props.insert(prop_name.clone());
-                            // Detect default override: if an ancestor already set a
-                            // default for this property, a descendant cannot change it.
-                            if let Some(prop_obj) = prop_schema.as_object() {
-                                if let Some(new_default) = prop_obj.get("default") {
-                                    if let Some(old_default) = known_defaults.get(prop_name) {
-                                        if old_default != new_default {
-                                            return Err(StoreError::ValidationError(format!(
-                                                "Schema '{gts_id}' trait validation failed: \
+                if let Some(obj) = ts.as_object()
+                    && let Some(serde_json::Value::Object(props)) = obj.get("properties")
+                {
+                    for (prop_name, prop_schema) in props {
+                        level_schema_props.insert(prop_name.clone());
+                        // Detect default override: if an ancestor already set a
+                        // default for this property, a descendant cannot change it.
+                        if let Some(prop_obj) = prop_schema.as_object()
+                            && let Some(new_default) = prop_obj.get("default")
+                        {
+                            if let Some(old_default) = known_defaults.get(prop_name) {
+                                if old_default != new_default {
+                                    return Err(StoreError::ValidationError(format!(
+                                        "Schema '{gts_id}' trait validation failed: \
                                                  trait schema default for '{prop_name}' in \
                                                  '{schema_id}' overrides default set by ancestor"
-                                            )));
-                                        }
-                                    } else {
-                                        known_defaults
-                                            .insert(prop_name.clone(), new_default.clone());
-                                    }
+                                    )));
                                 }
+                            } else {
+                                known_defaults.insert(prop_name.clone(), new_default.clone());
                             }
                         }
                     }
