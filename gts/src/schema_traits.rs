@@ -237,7 +237,11 @@ fn apply_defaults_recursive(trait_schema: &Value, traits: &Value, depth: usize) 
                 && prop_obj.contains_key("properties")
             {
                 // Property is present and is an object type with sub-properties —
-                // recurse to apply nested defaults.
+                // recurse to apply nested defaults.  If the input value is a
+                // non-object (e.g. a string where the schema expects an object),
+                // the recursion will produce a defaulted object that replaces the
+                // original value; JSON Schema validation will catch the type
+                // mismatch later, so this is intentional.
                 let nested = apply_defaults_recursive(
                     prop_schema,
                     result.get(prop_name.as_str()).unwrap_or(&Value::Null),

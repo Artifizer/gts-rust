@@ -3809,7 +3809,8 @@ fn test_op13_traits_missing_required_fails() {
             "properties": {
                 "topicRef": {"type": "string"},
                 "retention": {"type": "string", "default": "P30D"}
-            }
+            },
+            "required": ["topicRef"]
         },
         "properties": {"id": {"type": "string"}}
     });
