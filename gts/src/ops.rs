@@ -620,11 +620,33 @@ impl GtsOps {
     pub fn validate_entity(&mut self, gts_id: &str) -> GtsEntityValidationResult {
         if gts_id.ends_with('~') {
             let result = self.validate_schema(gts_id);
+            if !result.ok {
+                return GtsEntityValidationResult {
+                    id: result.id,
+                    ok: false,
+                    entity_type: "schema".to_owned(),
+                    error: result.error,
+                };
+            }
+
+            // Entity validation requires trait schemas to be "closed" — i.e.
+            // the effective trait schema must set `additionalProperties: false`.
+            // An open trait schema means the entity is designed to be extended
+            // and is not a valid standalone entity.
+            if let Err(e) = self.store.validate_entity_traits(gts_id) {
+                return GtsEntityValidationResult {
+                    id: gts_id.to_owned(),
+                    ok: false,
+                    entity_type: "schema".to_owned(),
+                    error: e.to_string(),
+                };
+            }
+
             GtsEntityValidationResult {
                 id: result.id,
-                ok: result.ok,
+                ok: true,
                 entity_type: "schema".to_owned(),
-                error: result.error,
+                error: String::new(),
             }
         } else {
             let result = self.validate_instance(gts_id);
@@ -771,6 +793,7 @@ impl GtsOps {
         self.get_entities(limit)
     }
 }
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

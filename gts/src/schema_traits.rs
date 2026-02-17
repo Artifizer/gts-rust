@@ -55,7 +55,7 @@ pub fn validate_traits_chain(chain_schemas: &[(String, Value)]) -> Result<(), Ve
         collect_trait_schema_from_value(content, &mut trait_schemas);
         collect_traits_from_value(content, &mut merged);
     }
-    validate_effective_traits(&trait_schemas, &Value::Object(merged))
+    validate_effective_traits(&trait_schemas, &Value::Object(merged), true)
 }
 
 /// Validates trait values against the effective trait schema built from the
@@ -66,6 +66,10 @@ pub fn validate_traits_chain(chain_schemas: &[(String, Value)]) -> Result<(), Ve
 ///
 /// `merged_traits` – shallow-merged `x-gts-traits` values (rightmost wins).
 ///
+/// When `check_unresolved` is `true`, every trait-schema property without a
+/// default must have a value in `merged_traits`; set to `false` for
+/// intermediate schema validation where descendants may still supply values.
+///
 /// # Errors
 /// Returns `Vec<String>` of error messages if trait values don't conform to the
 /// effective trait schema, if required traits are missing, or if traits exist
@@ -73,6 +77,7 @@ pub fn validate_traits_chain(chain_schemas: &[(String, Value)]) -> Result<(), Ve
 pub fn validate_effective_traits(
     resolved_trait_schemas: &[Value],
     merged_traits: &Value,
+    check_unresolved: bool,
 ) -> Result<(), Vec<String>> {
     let has_trait_values = merged_traits.as_object().is_some_and(|m| !m.is_empty());
 
@@ -109,7 +114,7 @@ pub fn validate_effective_traits(
 
     let effective_trait_schema = build_effective_trait_schema(resolved_trait_schemas);
     let effective_traits = apply_defaults(&effective_trait_schema, merged_traits);
-    validate_traits_against_schema(&effective_trait_schema, &effective_traits)
+    validate_traits_against_schema(&effective_trait_schema, &effective_traits, check_unresolved)
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +315,7 @@ fn collect_props_recursive(schema: &Value, props: &mut Vec<(String, Value)>, dep
 fn validate_traits_against_schema(
     trait_schema: &Value,
     effective_traits: &Value,
+    check_unresolved: bool,
 ) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
 
@@ -330,6 +336,15 @@ fn validate_traits_against_schema(
     // - It exists in the trait schema `properties`
     // - It has no `default`
     // - It is absent from the effective traits object
+    // Skipped when check_unresolved is false (intermediate schema validation).
+    if !check_unresolved {
+        return if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        };
+    }
+
     let all_props = collect_all_properties(trait_schema);
     let traits_obj = effective_traits.as_object();
 

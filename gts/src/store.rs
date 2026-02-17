@@ -801,6 +801,9 @@ impl GtsStore {
         // keeps `properties`/`required`, dropping extension keys like x-gts-*.
         let mut trait_schemas: Vec<serde_json::Value> = Vec::new();
         let mut merged_traits = serde_json::Map::new();
+        let mut locked_traits = std::collections::HashSet::<String>::new();
+        // Track defaults set by ancestor trait schemas to detect redefinition.
+        let mut known_defaults = std::collections::HashMap::<String, serde_json::Value>::new();
 
         for i in 0..segments.len() {
             let schema_id = format!(
@@ -818,11 +821,74 @@ impl GtsStore {
                 ))
             })?;
 
-            // Collect x-gts-traits-schema from the raw content
+            // Collect x-gts-traits-schema from the raw content.
+            // Track which properties this level's trait schema introduces so we
+            // know which trait values are allowed to be overridden.
+            let prev_schema_count = trait_schemas.len();
             crate::schema_traits::collect_trait_schema_from_value(&content, &mut trait_schemas);
+            let mut level_schema_props = std::collections::HashSet::new();
+            for ts in &trait_schemas[prev_schema_count..] {
+                if let Some(obj) = ts.as_object() {
+                    if let Some(serde_json::Value::Object(props)) = obj.get("properties") {
+                        for (prop_name, prop_schema) in props {
+                            level_schema_props.insert(prop_name.clone());
+                            // Detect default override: if an ancestor already set a
+                            // default for this property, a descendant cannot change it.
+                            if let Some(prop_obj) = prop_schema.as_object() {
+                                if let Some(new_default) = prop_obj.get("default") {
+                                    if let Some(old_default) = known_defaults.get(prop_name) {
+                                        if old_default != new_default {
+                                            return Err(StoreError::ValidationError(format!(
+                                                "Schema '{gts_id}' trait validation failed: \
+                                                 trait schema default for '{prop_name}' in \
+                                                 '{schema_id}' overrides default set by ancestor"
+                                            )));
+                                        }
+                                    } else {
+                                        known_defaults
+                                            .insert(prop_name.clone(), new_default.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
-            // Collect x-gts-traits from the raw content (shallow merge, rightmost wins)
-            crate::schema_traits::collect_traits_from_value(&content, &mut merged_traits);
+            // Collect x-gts-traits from the raw content.
+            // Trait values are immutable once set — UNLESS the level that set
+            // the value also introduced a new x-gts-traits-schema for that
+            // property (a "narrowing").  Values set alongside a schema narrowing
+            // are overridable; values set without one are locked.
+            let mut level_traits = serde_json::Map::new();
+            crate::schema_traits::collect_traits_from_value(&content, &mut level_traits);
+            tracing::debug!(
+                "validate_schema_traits [{schema_id}]: level_schema_props={:?}, level_traits={:?}, locked={:?}",
+                level_schema_props,
+                level_traits.keys().collect::<Vec<_>>(),
+                locked_traits
+            );
+            for (k, v) in &level_traits {
+                if let Some(existing) = merged_traits.get(k)
+                    && existing != v
+                    && locked_traits.contains(k.as_str())
+                {
+                    return Err(StoreError::ValidationError(format!(
+                        "Schema '{gts_id}' trait validation failed: \
+                         trait '{k}' in '{schema_id}' overrides value set by ancestor"
+                    )));
+                }
+            }
+            // Mark trait values as locked or unlocked based on whether this
+            // level also introduced a trait schema covering the property.
+            for k in level_traits.keys() {
+                if level_schema_props.contains(k) {
+                    locked_traits.remove(k.as_str());
+                } else {
+                    locked_traits.insert(k.clone());
+                }
+            }
+            merged_traits.extend(level_traits);
         }
 
         // Resolve $ref inside each collected trait schema so that external
@@ -838,15 +904,87 @@ impl GtsStore {
 
         // Delegate to the schema_traits module
         let merged = serde_json::Value::Object(merged_traits);
-        crate::schema_traits::validate_effective_traits(&resolved_trait_schemas, &merged).map_err(
-            |errors| {
+        crate::schema_traits::validate_effective_traits(&resolved_trait_schemas, &merged, true)
+            .map_err(|errors| {
                 StoreError::ValidationError(format!(
                     "Schema '{}' trait validation failed: {}",
                     gts_id,
                     errors.join("; ")
                 ))
-            },
-        )
+            })
+    }
+
+    /// OP#13 entity-level check: ensures the effective trait schema is "closed".
+    ///
+    /// For a schema to be a valid standalone entity, every `x-gts-traits-schema`
+    /// in the chain must set `additionalProperties: false`.  An open trait schema
+    /// signals that the schema is designed to be extended and is not a deployable
+    /// entity.  Additionally, if a trait schema is defined but no `x-gts-traits`
+    /// values exist anywhere in the chain, the entity is incomplete.
+    pub(crate) fn validate_entity_traits(&mut self, gts_id: &str) -> Result<(), StoreError> {
+        let gid = GtsID::new(gts_id)
+            .map_err(|e| StoreError::ValidationError(format!("Invalid GTS ID: {e}")))?;
+
+        let segments = &gid.gts_id_segments;
+
+        let mut trait_schemas: Vec<serde_json::Value> = Vec::new();
+        let mut has_trait_values = false;
+
+        for i in 0..segments.len() {
+            let schema_id = format!(
+                "gts.{}",
+                segments[..=i]
+                    .iter()
+                    .map(|s| s.segment.as_str())
+                    .collect::<Vec<_>>()
+                    .join("")
+            );
+
+            let content = self.get_schema_content(&schema_id).map_err(|_| {
+                StoreError::ValidationError(format!(
+                    "Schema '{schema_id}' not found for entity trait validation"
+                ))
+            })?;
+
+            crate::schema_traits::collect_trait_schema_from_value(&content, &mut trait_schemas);
+
+            let mut level_traits = serde_json::Map::new();
+            crate::schema_traits::collect_traits_from_value(&content, &mut level_traits);
+            if !level_traits.is_empty() {
+                has_trait_values = true;
+            }
+        }
+
+        if trait_schemas.is_empty() {
+            return Ok(());
+        }
+
+        // If trait schemas exist but no trait values are provided, the entity
+        // is incomplete.
+        if !has_trait_values {
+            return Err(StoreError::ValidationError(
+                "Entity defines x-gts-traits-schema but no x-gts-traits values are provided"
+                    .to_owned(),
+            ));
+        }
+
+        // Each trait schema must be closed (additionalProperties: false)
+        for ts in &trait_schemas {
+            if let Some(obj) = ts.as_object() {
+                match obj.get("additionalProperties") {
+                    Some(serde_json::Value::Bool(false)) => {} // closed — ok
+                    _ => {
+                        return Err(StoreError::ValidationError(
+                            "Entity trait schema must set additionalProperties: false \
+                             to be a valid standalone entity"
+                                .to_owned(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Validates an instance against its schema.

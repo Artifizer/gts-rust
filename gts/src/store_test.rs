@@ -4283,3 +4283,66 @@ fn test_resolve_schema_refs_checked_detects_duplicate_ref_in_allof() {
     let resolved = store.resolve_schema_refs(&trait_schema_value);
     assert!(resolved.is_object(), "resolve_schema_refs should succeed");
 }
+
+#[test]
+fn test_op13_change_default_in_mid_fails() {
+    let mut store = GtsStore::new(None);
+
+    // Base: retention default=P30D
+    let base = json!({
+        "$id": "gts://gts.x.test13.chdfl.event.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "x-gts-traits-schema": {
+            "type": "object",
+            "properties": {
+                "retention": {
+                    "type": "string",
+                    "default": "P30D"
+                },
+                "topicRef": {
+                    "type": "string"
+                }
+            }
+        },
+        "properties": {"id": {"type": "string"}}
+    });
+    store
+        .register_schema("gts.x.test13.chdfl.event.v1~", &base)
+        .expect("register base");
+
+    // Mid: changes retention default to P90D — should fail
+    let mid = json!({
+        "$id": "gts://gts.x.test13.chdfl.event.v1~x.test13._.chdfl_mid.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "allOf": [
+            {"$ref": "gts://gts.x.test13.chdfl.event.v1~"},
+            {
+                "type": "object",
+                "x-gts-traits-schema": {
+                    "type": "object",
+                    "properties": {
+                        "retention": {
+                            "type": "string",
+                            "default": "P90D"
+                        }
+                    }
+                },
+                "x-gts-traits": {
+                    "topicRef": "gts.x.core.events.topic.v1~x.test13._.orders.v1"
+                }
+            }
+        ]
+    });
+    store
+        .register_schema("gts.x.test13.chdfl.event.v1~x.test13._.chdfl_mid.v1~", &mid)
+        .expect("register mid");
+
+    let result =
+        store.validate_schema_traits("gts.x.test13.chdfl.event.v1~x.test13._.chdfl_mid.v1~");
+    assert!(
+        result.is_err(),
+        "Changing default in mid-level should fail, got: {result:?}"
+    );
+}
