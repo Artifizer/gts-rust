@@ -594,7 +594,16 @@ impl GtsOps {
         }
 
         // Then run schema-vs-schema chain validation (OP#12)
-        match self.store.validate_schema_chain(gts_id) {
+        if let Err(e) = self.store.validate_schema_chain(gts_id) {
+            return GtsValidationResult {
+                id: gts_id.to_owned(),
+                ok: false,
+                error: e.to_string(),
+            };
+        }
+
+        // Then run schema traits validation (OP#13)
+        match self.store.validate_schema_traits(gts_id) {
             Ok(()) => GtsValidationResult {
                 id: gts_id.to_owned(),
                 ok: true,

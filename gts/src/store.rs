@@ -676,6 +676,69 @@ impl GtsStore {
         Ok(())
     }
 
+    /// OP#13: Validates schema traits across the inheritance chain.
+    ///
+    /// Walks the chain from base to leaf, collects `x-gts-traits-schema` and
+    /// `x-gts-traits` from each level's **raw** content (before allOf
+    /// flattening which would drop `x-gts-*` keys), resolves `$ref` inside
+    /// collected trait schemas, then validates.
+    ///
+    /// # Errors
+    /// Returns `StoreError::ValidationError` if trait validation fails.
+    pub(crate) fn validate_schema_traits(&mut self, gts_id: &str) -> Result<(), StoreError> {
+        let gid = GtsID::new(gts_id)
+            .map_err(|e| StoreError::ValidationError(format!("Invalid GTS ID: {e}")))?;
+
+        let segments = &gid.gts_id_segments;
+
+        // Collect raw trait schemas and trait values from every schema in the chain.
+        // We use *raw* content because resolve_schema_refs flattens allOf and only
+        // keeps `properties`/`required`, dropping extension keys like x-gts-*.
+        let mut trait_schemas: Vec<serde_json::Value> = Vec::new();
+        let mut merged_traits = serde_json::Map::new();
+
+        for i in 0..segments.len() {
+            let schema_id = format!(
+                "gts.{}",
+                segments[..=i]
+                    .iter()
+                    .map(|s| s.segment.as_str())
+                    .collect::<Vec<_>>()
+                    .join("")
+            );
+
+            let content = self.get_schema_content(&schema_id).map_err(|_| {
+                StoreError::ValidationError(format!(
+                    "Schema '{schema_id}' not found for trait validation"
+                ))
+            })?;
+
+            // Collect x-gts-traits-schema from the raw content
+            crate::schema_traits::collect_trait_schema_from_value(&content, &mut trait_schemas);
+
+            // Collect x-gts-traits from the raw content (shallow merge, rightmost wins)
+            crate::schema_traits::collect_traits_from_value(&content, &mut merged_traits);
+        }
+
+        // Resolve $ref inside each collected trait schema so that external
+        // references (e.g. gts://gts.x.test13.traits.retention.v1~) are inlined.
+        let resolved_trait_schemas: Vec<serde_json::Value> = trait_schemas
+            .iter()
+            .map(|ts| self.resolve_schema_refs(ts))
+            .collect();
+
+        // Delegate to the schema_traits module
+        let merged = serde_json::Value::Object(merged_traits);
+        crate::schema_traits::validate_effective_traits(&resolved_trait_schemas, &merged)
+            .map_err(|errors| {
+                StoreError::ValidationError(format!(
+                    "Schema '{}' trait validation failed: {}",
+                    gts_id,
+                    errors.join("; ")
+                ))
+            })
+    }
+
     /// Validates an instance against its schema.
     ///
     /// # Errors

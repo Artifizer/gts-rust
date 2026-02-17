@@ -3705,3 +3705,300 @@ fn test_op12_derived_omits_max_length() {
     let result = store.validate_schema_chain("gts.x.test.maxlen.base.v1~x.test._.loose.v1~");
     assert!(result.is_err(), "Omitting maxLength should fail");
 }
+
+// ---------------------------------------------------------------------------
+// OP#13 – Schema Traits Validation (store integration tests)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_op13_traits_all_resolved_passes() {
+    let mut store = GtsStore::new(None);
+
+    let base = json!({
+        "$id": "gts://gts.x.test13.tr.base.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "x-gts-traits-schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "topicRef": {"type": "string"},
+                "retention": {"type": "string"}
+            }
+        },
+        "properties": {"id": {"type": "string"}}
+    });
+    store
+        .register_schema("gts.x.test13.tr.base.v1~", &base)
+        .expect("register base");
+
+    let derived = json!({
+        "$id": "gts://gts.x.test13.tr.base.v1~x.test13._.leaf.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "allOf": [
+            {"$ref": "gts://gts.x.test13.tr.base.v1~"},
+            {
+                "type": "object",
+                "x-gts-traits": {
+                    "topicRef": "gts.x.core.events.topic.v1~x.test._.orders.v1",
+                    "retention": "P90D"
+                }
+            }
+        ]
+    });
+    store
+        .register_schema(
+            "gts.x.test13.tr.base.v1~x.test13._.leaf.v1~",
+            &derived,
+        )
+        .expect("register derived");
+
+    let result =
+        store.validate_schema_traits("gts.x.test13.tr.base.v1~x.test13._.leaf.v1~");
+    assert!(result.is_ok(), "All traits resolved should pass: {result:?}");
+}
+
+#[test]
+fn test_op13_traits_defaults_fill_passes() {
+    let mut store = GtsStore::new(None);
+
+    let base = json!({
+        "$id": "gts://gts.x.test13.dfl.base.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "x-gts-traits-schema": {
+            "type": "object",
+            "properties": {
+                "retention": {"type": "string", "default": "P30D"},
+                "topicRef": {"type": "string", "default": "default_topic"}
+            }
+        },
+        "properties": {"id": {"type": "string"}}
+    });
+    store
+        .register_schema("gts.x.test13.dfl.base.v1~", &base)
+        .expect("register base");
+
+    let derived = json!({
+        "$id": "gts://gts.x.test13.dfl.base.v1~x.test13._.leaf.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "allOf": [
+            {"$ref": "gts://gts.x.test13.dfl.base.v1~"},
+            {"type": "object"}
+        ]
+    });
+    store
+        .register_schema(
+            "gts.x.test13.dfl.base.v1~x.test13._.leaf.v1~",
+            &derived,
+        )
+        .expect("register derived");
+
+    let result =
+        store.validate_schema_traits("gts.x.test13.dfl.base.v1~x.test13._.leaf.v1~");
+    assert!(result.is_ok(), "Defaults should fill traits: {result:?}");
+}
+
+#[test]
+fn test_op13_traits_missing_required_fails() {
+    let mut store = GtsStore::new(None);
+
+    let base = json!({
+        "$id": "gts://gts.x.test13.mis.base.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "x-gts-traits-schema": {
+            "type": "object",
+            "properties": {
+                "topicRef": {"type": "string"},
+                "retention": {"type": "string", "default": "P30D"}
+            }
+        },
+        "properties": {"id": {"type": "string"}}
+    });
+    store
+        .register_schema("gts.x.test13.mis.base.v1~", &base)
+        .expect("register base");
+
+    let derived = json!({
+        "$id": "gts://gts.x.test13.mis.base.v1~x.test13._.leaf.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "allOf": [
+            {"$ref": "gts://gts.x.test13.mis.base.v1~"},
+            {
+                "type": "object",
+                "x-gts-traits": {"retention": "P90D"}
+            }
+        ]
+    });
+    store
+        .register_schema(
+            "gts.x.test13.mis.base.v1~x.test13._.leaf.v1~",
+            &derived,
+        )
+        .expect("register derived");
+
+    let result =
+        store.validate_schema_traits("gts.x.test13.mis.base.v1~x.test13._.leaf.v1~");
+    assert!(result.is_err(), "Missing topicRef should fail");
+}
+
+#[test]
+fn test_op13_traits_wrong_type_fails() {
+    let mut store = GtsStore::new(None);
+
+    let base = json!({
+        "$id": "gts://gts.x.test13.wt.base.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "x-gts-traits-schema": {
+            "type": "object",
+            "properties": {
+                "maxRetries": {"type": "integer", "minimum": 0, "default": 3}
+            }
+        },
+        "properties": {"id": {"type": "string"}}
+    });
+    store
+        .register_schema("gts.x.test13.wt.base.v1~", &base)
+        .expect("register base");
+
+    let derived = json!({
+        "$id": "gts://gts.x.test13.wt.base.v1~x.test13._.leaf.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "allOf": [
+            {"$ref": "gts://gts.x.test13.wt.base.v1~"},
+            {
+                "type": "object",
+                "x-gts-traits": {"maxRetries": "not_a_number"}
+            }
+        ]
+    });
+    store
+        .register_schema(
+            "gts.x.test13.wt.base.v1~x.test13._.leaf.v1~",
+            &derived,
+        )
+        .expect("register derived");
+
+    let result =
+        store.validate_schema_traits("gts.x.test13.wt.base.v1~x.test13._.leaf.v1~");
+    assert!(result.is_err(), "Wrong type should fail");
+}
+
+#[test]
+fn test_op13_traits_no_traits_schema_passes() {
+    let mut store = GtsStore::new(None);
+
+    let base = json!({
+        "$id": "gts://gts.x.test13.nt.base.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {"id": {"type": "string"}}
+    });
+    store
+        .register_schema("gts.x.test13.nt.base.v1~", &base)
+        .expect("register base");
+
+    let derived = json!({
+        "$id": "gts://gts.x.test13.nt.base.v1~x.test13._.leaf.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "allOf": [
+            {"$ref": "gts://gts.x.test13.nt.base.v1~"},
+            {"type": "object", "properties": {"extra": {"type": "string"}}}
+        ]
+    });
+    store
+        .register_schema(
+            "gts.x.test13.nt.base.v1~x.test13._.leaf.v1~",
+            &derived,
+        )
+        .expect("register derived");
+
+    let result =
+        store.validate_schema_traits("gts.x.test13.nt.base.v1~x.test13._.leaf.v1~");
+    assert!(result.is_ok(), "No traits schema means nothing to validate: {result:?}");
+}
+
+#[test]
+fn test_op13_traits_ref_based_trait_schema() {
+    let mut store = GtsStore::new(None);
+
+    // Register standalone reusable trait schema
+    let retention_trait = json!({
+        "$id": "gts://gts.x.test13.traits.retention.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+            "retention": {"type": "string", "default": "P30D"}
+        }
+    });
+    store
+        .register_schema("gts.x.test13.traits.retention.v1~", &retention_trait)
+        .expect("register retention trait");
+
+    let topic_trait = json!({
+        "$id": "gts://gts.x.test13.traits.topic.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+            "topicRef": {"type": "string"}
+        }
+    });
+    store
+        .register_schema("gts.x.test13.traits.topic.v1~", &topic_trait)
+        .expect("register topic trait");
+
+    // Base uses $ref to compose trait schemas
+    let base = json!({
+        "$id": "gts://gts.x.test13.ref.base.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "x-gts-traits-schema": {
+            "type": "object",
+            "allOf": [
+                {"$ref": "gts://gts.x.test13.traits.retention.v1~"},
+                {"$ref": "gts://gts.x.test13.traits.topic.v1~"}
+            ]
+        },
+        "properties": {"id": {"type": "string"}}
+    });
+    store
+        .register_schema("gts.x.test13.ref.base.v1~", &base)
+        .expect("register base");
+
+    // Derived provides all trait values
+    let derived = json!({
+        "$id": "gts://gts.x.test13.ref.base.v1~x.test13._.leaf.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "allOf": [
+            {"$ref": "gts://gts.x.test13.ref.base.v1~"},
+            {
+                "type": "object",
+                "x-gts-traits": {
+                    "topicRef": "gts.x.core.events.topic.v1~x.test._.orders.v1",
+                    "retention": "P90D"
+                }
+            }
+        ]
+    });
+    store
+        .register_schema(
+            "gts.x.test13.ref.base.v1~x.test13._.leaf.v1~",
+            &derived,
+        )
+        .expect("register derived");
+
+    let result =
+        store.validate_schema_traits("gts.x.test13.ref.base.v1~x.test13._.leaf.v1~");
+    assert!(
+        result.is_ok(),
+        "$ref trait schemas should resolve and validate: {result:?}"
+    );
+}
