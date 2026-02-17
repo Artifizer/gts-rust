@@ -10,6 +10,19 @@
 //!    - `x-gts-traits` objects → shallow-merge (rightmost wins) into the *effective traits object*.
 //! 3. Apply defaults from the effective trait schema to fill unresolved trait properties.
 //! 4. Validate the effective traits object against the effective trait schema.
+//!
+//! **Override semantics:** When the same trait property appears at multiple
+//! levels in the chain, the *rightmost* (most-derived) value wins.  The
+//! override is unconditional — it replaces the previous value regardless of
+//! type.  However, the *final* merged value is validated against the
+//! *composed* effective trait schema (all `allOf` sub-schemas apply), so an
+//! override that violates a constraint introduced at any level will fail.
+//!
+//! **Empty trait schemas:** If a schema in the chain declares
+//! `x-gts-traits-schema: {}`, it contributes an unconstrained sub-schema.
+//! When composed via `allOf`, an empty sub-schema does not restrict the
+//! validated object.  This means any trait values are accepted as long as
+//! other sub-schemas in the composition don't reject them.
 
 use serde_json::Value;
 
@@ -74,14 +87,22 @@ pub fn validate_effective_traits(
         return Ok(());
     }
 
-    // Validate trait schema integrity: x-gts-traits-schema must not contain x-gts-traits
+    // Validate trait schema integrity
     for (i, ts) in resolved_trait_schemas.iter().enumerate() {
+        // x-gts-traits-schema must not contain x-gts-traits
         if let Some(obj) = ts.as_object()
             && obj.contains_key("x-gts-traits")
         {
             return Err(vec![format!(
                 "x-gts-traits-schema[{i}] contains 'x-gts-traits' \u{2014} \
                  trait values must not appear inside a trait schema definition"
+            )]);
+        }
+
+        // Each trait schema must be compilable as a valid JSON Schema
+        if let Err(e) = jsonschema::validator_for(ts) {
+            return Err(vec![format!(
+                "x-gts-traits-schema[{i}] is not a valid JSON Schema: {e}"
             )]);
         }
     }
@@ -231,10 +252,24 @@ fn apply_defaults_recursive(trait_schema: &Value, traits: &Value, depth: usize) 
 }
 
 /// Collect all property definitions from a schema, handling `allOf` composition.
+///
+/// When the same property name appears in multiple `allOf` sub-schemas (e.g.
+/// base defines `priority: {type: string}` and mid narrows to an enum), the
+/// *last-seen* definition wins.  This matches the rightmost-wins semantics of
+/// JSON Schema `allOf` merge and avoids duplicate "unresolved" errors.
 fn collect_all_properties(schema: &Value) -> Vec<(String, Value)> {
     let mut props = Vec::new();
     collect_props_recursive(schema, &mut props, 0);
-    props
+    // Deduplicate: keep last occurrence of each property name (rightmost wins)
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped = Vec::with_capacity(props.len());
+    for (name, schema) in props.into_iter().rev() {
+        if seen.insert(name.clone()) {
+            deduped.push((name, schema));
+        }
+    }
+    deduped.reverse();
+    deduped
 }
 
 fn collect_props_recursive(schema: &Value, props: &mut Vec<(String, Value)>, depth: usize) {
@@ -784,7 +819,7 @@ mod tests {
 
     #[test]
     fn test_deep_inheritance_chain() {
-        // 10-level chain — exercises recursion without hitting the depth limit
+        // Chain near MAX_RECURSION_DEPTH — exercises recursion guard boundary
         let mut chain = vec![(
             "base~".to_owned(),
             json!({
@@ -797,7 +832,7 @@ mod tests {
                 }
             }),
         )];
-        for i in 1..10 {
+        for i in 1..super::MAX_RECURSION_DEPTH {
             chain.push((format!("level{i}~"), json!({"type": "object"})));
         }
         assert!(validate_traits_chain(&chain).is_ok());
@@ -997,6 +1032,141 @@ mod tests {
         assert!(
             err.iter().any(|e| e.contains("type: string")),
             "error message should include expected type: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_empty_trait_schema_permits_any_traits() {
+        // An empty x-gts-traits-schema: {} is unconstrained — any trait values pass
+        let chain = vec![
+            (
+                "base~".to_owned(),
+                json!({
+                    "type": "object",
+                    "x-gts-traits-schema": {}
+                }),
+            ),
+            (
+                "derived~".to_owned(),
+                json!({
+                    "type": "object",
+                    "x-gts-traits": {"anything": "goes", "count": 42}
+                }),
+            ),
+        ];
+        assert!(
+            validate_traits_chain(&chain).is_ok(),
+            "empty trait schema should permit any traits"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_property_dedup_rightmost_wins() {
+        // Base defines `priority: string`, mid narrows to enum.
+        // The dedup should keep the enum definition (rightmost), not report
+        // "priority" as unresolved twice.
+        let chain = vec![
+            (
+                "base~".to_owned(),
+                json!({
+                    "type": "object",
+                    "x-gts-traits-schema": {
+                        "type": "object",
+                        "properties": {
+                            "priority": {"type": "string"},
+                            "retention": {"type": "string", "default": "P30D"}
+                        }
+                    }
+                }),
+            ),
+            (
+                "mid~".to_owned(),
+                json!({
+                    "type": "object",
+                    "x-gts-traits-schema": {
+                        "type": "object",
+                        "properties": {
+                            "priority": {
+                                "type": "string",
+                                "enum": ["low", "medium", "high"]
+                            }
+                        }
+                    }
+                }),
+            ),
+            (
+                "leaf~".to_owned(),
+                json!({
+                    "type": "object",
+                    "x-gts-traits": {"priority": "high"}
+                }),
+            ),
+        ];
+        // Should pass: priority is provided, retention has default
+        assert!(
+            validate_traits_chain(&chain).is_ok(),
+            "dedup should keep rightmost definition"
+        );
+
+        // Verify that missing priority only reports once
+        let chain_missing = vec![
+            (
+                "base~".to_owned(),
+                json!({
+                    "type": "object",
+                    "x-gts-traits-schema": {
+                        "type": "object",
+                        "properties": {
+                            "priority": {"type": "string"},
+                            "retention": {"type": "string", "default": "P30D"}
+                        }
+                    }
+                }),
+            ),
+            (
+                "mid~".to_owned(),
+                json!({
+                    "type": "object",
+                    "x-gts-traits-schema": {
+                        "type": "object",
+                        "properties": {
+                            "priority": {
+                                "type": "string",
+                                "enum": ["low", "medium", "high"]
+                            }
+                        }
+                    }
+                }),
+            ),
+            ("leaf~".to_owned(), json!({"type": "object"})),
+        ];
+        let err = validate_traits_chain(&chain_missing).unwrap_err();
+        let priority_errors: Vec<_> = err.iter().filter(|e| e.contains("priority")).collect();
+        assert_eq!(
+            priority_errors.len(),
+            1,
+            "priority should be reported exactly once, got: {priority_errors:?}"
+        );
+    }
+
+    #[test]
+    fn test_invalid_trait_schema_caught_early() {
+        // x-gts-traits-schema with an invalid "type" value should fail early
+        // with a clear message about being an invalid JSON Schema
+        let chain = vec![(
+            "base~".to_owned(),
+            json!({
+                "type": "object",
+                "x-gts-traits-schema": {
+                    "type": "invalid_type_value"
+                }
+            }),
+        )];
+        let err = validate_traits_chain(&chain).unwrap_err();
+        assert!(
+            err.iter()
+                .any(|e| e.contains("not a valid JSON Schema") || e.contains("failed to compile")),
+            "should report invalid JSON Schema early: {err:?}"
         );
     }
 }

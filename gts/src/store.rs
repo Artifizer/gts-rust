@@ -231,8 +231,33 @@ impl GtsStore {
     /// let inlined = store.resolve_schema_refs(&child_schema_with_ref);
     /// assert!(!inlined.to_string().contains("$ref"));
     /// ```
-    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
+    #[must_use]
     pub fn resolve_schema_refs(&self, schema: &Value) -> Value {
+        let mut visited = std::collections::HashSet::new();
+        let mut cycle_found = false;
+        self.resolve_schema_refs_inner(schema, &mut visited, &mut cycle_found)
+    }
+
+    /// Like [`resolve_schema_refs`] but returns an error if a circular `$ref`
+    /// is detected during resolution.
+    pub(crate) fn resolve_schema_refs_checked(&self, schema: &Value) -> Result<Value, String> {
+        let mut visited = std::collections::HashSet::new();
+        let mut cycle_found = false;
+        let resolved = self.resolve_schema_refs_inner(schema, &mut visited, &mut cycle_found);
+        if cycle_found {
+            Err("circular $ref detected".to_owned())
+        } else {
+            Ok(resolved)
+        }
+    }
+
+    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
+    fn resolve_schema_refs_inner(
+        &self,
+        schema: &Value,
+        visited: &mut std::collections::HashSet<String>,
+        cycle_found: &mut bool,
+    ) -> Value {
         // Recursively resolve $ref references in the schema
         match schema {
             Value::Object(map) => {
@@ -250,7 +275,10 @@ impl GtsStore {
                             // Other internal references - keep as-is
                             let mut new_map = serde_json::Map::new();
                             for (k, v) in map {
-                                new_map.insert(k.clone(), self.resolve_schema_refs(v));
+                                new_map.insert(
+                                    k.clone(),
+                                    self.resolve_schema_refs_inner(v, visited, cycle_found),
+                                );
                             }
                             return Value::Object(new_map);
                         }
@@ -260,12 +288,35 @@ impl GtsStore {
                     // Normalize the ref: strip gts:// prefix to get canonical GTS ID
                     let canonical_ref = ref_uri.strip_prefix(GTS_URI_PREFIX).unwrap_or(ref_uri);
 
+                    // Cycle detection: skip if we've already visited this ref
+                    if visited.contains(canonical_ref) {
+                        // Circular $ref detected — drop it to avoid infinite loop
+                        *cycle_found = true;
+                        let mut new_map = serde_json::Map::new();
+                        for (k, v) in map {
+                            if k != "$ref" {
+                                new_map.insert(
+                                    k.clone(),
+                                    self.resolve_schema_refs_inner(v, visited, cycle_found),
+                                );
+                            }
+                        }
+                        if new_map.is_empty() {
+                            return schema.clone();
+                        }
+                        return Value::Object(new_map);
+                    }
+
                     // Try to resolve the reference using canonical ID
                     if let Some(entity) = self.by_id.get(canonical_ref)
                         && entity.is_schema
                     {
+                        // Mark as visited before recursing
+                        visited.insert(canonical_ref.to_owned());
                         // Recursively resolve refs in the referenced schema
-                        let mut resolved = self.resolve_schema_refs(&entity.content);
+                        let mut resolved =
+                            self.resolve_schema_refs_inner(&entity.content, visited, cycle_found);
+                        visited.remove(canonical_ref);
 
                         // Remove $id and $schema from resolved content to avoid URL resolution issues
                         // Note: $defs for GtsInstanceId/GtsSchemaId are inlined during resolution (see match above)
@@ -284,7 +335,10 @@ impl GtsStore {
                             let mut merged = resolved_map;
                             for (k, v) in map {
                                 if k != "$ref" {
-                                    merged.insert(k.clone(), self.resolve_schema_refs(v));
+                                    merged.insert(
+                                        k.clone(),
+                                        self.resolve_schema_refs_inner(v, visited, cycle_found),
+                                    );
                                 }
                             }
                             return Value::Object(merged);
@@ -295,7 +349,10 @@ impl GtsStore {
                     let mut new_map = serde_json::Map::new();
                     for (k, v) in map {
                         if k != "$ref" {
-                            new_map.insert(k.clone(), self.resolve_schema_refs(v));
+                            new_map.insert(
+                                k.clone(),
+                                self.resolve_schema_refs_inner(v, visited, cycle_found),
+                            );
                         }
                     }
                     if !new_map.is_empty() {
@@ -311,7 +368,8 @@ impl GtsStore {
                     let mut merged_required: Vec<String> = Vec::new();
 
                     for item in all_of_array {
-                        let resolved_item = self.resolve_schema_refs(item);
+                        let resolved_item =
+                            self.resolve_schema_refs_inner(item, visited, cycle_found);
 
                         match resolved_item {
                             Value::Object(ref item_map) => {
@@ -373,13 +431,18 @@ impl GtsStore {
                 // Recursively process all properties
                 let mut new_map = serde_json::Map::new();
                 for (k, v) in map {
-                    new_map.insert(k.clone(), self.resolve_schema_refs(v));
+                    new_map.insert(
+                        k.clone(),
+                        self.resolve_schema_refs_inner(v, visited, cycle_found),
+                    );
                 }
                 Value::Object(new_map)
             }
-            Value::Array(arr) => {
-                Value::Array(arr.iter().map(|v| self.resolve_schema_refs(v)).collect())
-            }
+            Value::Array(arr) => Value::Array(
+                arr.iter()
+                    .map(|v| self.resolve_schema_refs_inner(v, visited, cycle_found))
+                    .collect(),
+            ),
             _ => schema.clone(),
         }
     }
@@ -649,8 +712,14 @@ impl GtsStore {
                 ))
             })?;
 
-            let base_resolved = self.resolve_schema_refs(&base_content);
-            let derived_resolved = self.resolve_schema_refs(&derived_content);
+            let base_resolved = self
+                .resolve_schema_refs_checked(&base_content)
+                .map_err(|e| StoreError::ValidationError(format!("Schema '{base_id}' has {e}")))?;
+            let derived_resolved =
+                self.resolve_schema_refs_checked(&derived_content)
+                    .map_err(|e| {
+                        StoreError::ValidationError(format!("Schema '{derived_id}' has {e}"))
+                    })?;
 
             // Extract effective schemas and compare via schema_compat module
             let base_eff = crate::schema_compat::extract_effective_schema(&base_resolved);
@@ -722,10 +791,14 @@ impl GtsStore {
 
         // Resolve $ref inside each collected trait schema so that external
         // references (e.g. gts://gts.x.test13.traits.retention.v1~) are inlined.
-        let resolved_trait_schemas: Vec<serde_json::Value> = trait_schemas
-            .iter()
-            .map(|ts| self.resolve_schema_refs(ts))
-            .collect();
+        let mut resolved_trait_schemas: Vec<serde_json::Value> =
+            Vec::with_capacity(trait_schemas.len());
+        for ts in &trait_schemas {
+            let resolved = self.resolve_schema_refs_checked(ts).map_err(|e| {
+                StoreError::ValidationError(format!("Schema '{gts_id}' trait schema has {e}"))
+            })?;
+            resolved_trait_schemas.push(resolved);
+        }
 
         // Delegate to the schema_traits module
         let merged = serde_json::Value::Object(merged_traits);

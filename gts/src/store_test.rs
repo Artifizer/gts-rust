@@ -4160,3 +4160,83 @@ fn test_op13_traits_ref_based_trait_schema() {
         "$ref trait schemas should resolve and validate: {result:?}"
     );
 }
+
+#[test]
+fn test_op13_traits_ref_to_nonexistent_schema() {
+    let mut store = GtsStore::new(None);
+
+    // Base with trait schema that $refs a schema not in the store
+    let base = json!({
+        "$id": "gts://gts.x.test13.badref.base.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "x-gts-traits-schema": {
+            "type": "object",
+            "allOf": [
+                {"$ref": "gts://gts.x.test13.traits.nonexistent.v1~"}
+            ]
+        },
+        "properties": {"id": {"type": "string"}}
+    });
+    store
+        .register_schema("gts.x.test13.badref.base.v1~", &base)
+        .expect("register base");
+
+    let derived = json!({
+        "$id": "gts://gts.x.test13.badref.base.v1~x.test13._.leaf.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "allOf": [
+            {"$ref": "gts://gts.x.test13.badref.base.v1~"},
+            {
+                "type": "object",
+                "x-gts-traits": {"foo": "bar"}
+            }
+        ]
+    });
+    store
+        .register_schema("gts.x.test13.badref.base.v1~x.test13._.leaf.v1~", &derived)
+        .expect("register derived");
+
+    // Should not panic — unresolvable $ref is dropped gracefully
+    let _result = store.validate_schema_traits("gts.x.test13.badref.base.v1~x.test13._.leaf.v1~");
+}
+
+#[test]
+fn test_op13_circular_ref_does_not_hang() {
+    let mut store = GtsStore::new(None);
+
+    // Schema A refs schema B, schema B refs schema A — circular
+    let schema_a = json!({
+        "$id": "gts://gts.x.test13.circ.a.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "x-gts-traits-schema": {
+            "type": "object",
+            "allOf": [
+                {"$ref": "gts://gts.x.test13.circ.b.v1~"}
+            ]
+        },
+        "properties": {"id": {"type": "string"}}
+    });
+    let schema_b = json!({
+        "$id": "gts://gts.x.test13.circ.b.v1~",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "allOf": [
+            {"$ref": "gts://gts.x.test13.circ.a.v1~"}
+        ],
+        "properties": {"name": {"type": "string"}}
+    });
+    store
+        .register_schema("gts.x.test13.circ.a.v1~", &schema_a)
+        .expect("register A");
+    store
+        .register_schema("gts.x.test13.circ.b.v1~", &schema_b)
+        .expect("register B");
+
+    // resolve_schema_refs must not infinite-loop on circular refs
+    let resolved = store.resolve_schema_refs(&schema_a);
+    // Should terminate and produce a value (circular part is dropped)
+    assert!(resolved.is_object(), "should produce a valid object");
+}
