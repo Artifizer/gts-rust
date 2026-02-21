@@ -1,15 +1,9 @@
 {
-  "$id": "gts://gts.x.core.events.topic.v1~",
+  "$id": "gts://gts.x.test.single.segment.v1~",
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
-  "description": "Event Topic (Stream) definition",
+  "description": "Base struct with single segment",
   "properties": {
-    "description": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
     "id": {
       "description": "GTS instance identifier",
       "format": "gts-instance-id",
@@ -19,20 +13,12 @@
     },
     "name": {
       "type": "string"
-    },
-    "ordering": {
-      "type": "string"
-    },
-    "retention": {
-      "type": "string"
     }
   },
   "required": [
     "id",
-    "name",
-    "ordering",
-    "retention"
+    "name"
   ],
-  "title": "EventTopicV1",
+  "title": "SingleSegmentBaseV1",
   "type": "object"
 }

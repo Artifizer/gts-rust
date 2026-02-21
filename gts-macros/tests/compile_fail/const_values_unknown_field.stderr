@@ -1,0 +1,13 @@
+error[E0609]: no field `nonexistent_field` on type `ConstBaseV1<ConstDerivedV1>`
+  --> tests/compile_fail/const_values_unknown_field.rs:21:1
+   |
+21 | / #[struct_to_gts_schema(
+22 | |     dir_path = "schemas",
+23 | |     base = ConstBaseV1,
+24 | |     schema_id = "gts.x.test.const.base.v1~x.test.const.derived.v1~",
+...  |
+27 | |     const_values = "nonexistent_field=42"
+28 | | )]
+   | |__^ unknown field
+   |
+   = note: this error originates in the attribute macro `struct_to_gts_schema` (in Nightly builds, run with -Z macro-backtrace for more info)

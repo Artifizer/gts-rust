@@ -1,0 +1,20 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/const_values_type_mismatch_bool_to_string.rs:21:1
+   |
+21 | / #[struct_to_gts_schema(
+22 | |     dir_path = "schemas",
+23 | |     base = MismatchBStrBaseV1,
+24 | |     schema_id = "gts.x.test.mismatch.bstr.v1~x.test.mismatch.bool_to_string.v1~",
+...  |
+27 | |     const_values = "label=true"
+28 | | )]
+   | |  ^
+   | |  |
+   | |__expected `String`, found `bool`
+   |    expected due to the type of this binding
+   |
+   = note: this error originates in the attribute macro `struct_to_gts_schema` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: try using a conversion method
+   |
+28 | )].to_string()
+   |   ++++++++++++

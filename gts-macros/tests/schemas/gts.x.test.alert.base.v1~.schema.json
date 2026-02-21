@@ -1,0 +1,36 @@
+{
+  "$id": "gts://gts.x.test.alert.base.v1~",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "Alert payload base with channel, severity, kind, data fields",
+  "properties": {
+    "channel": {
+      "type": "string"
+    },
+    "data": {
+      "type": "object"
+    },
+    "recipient": {
+      "type": "string"
+    },
+    "severity": {
+      "type": "integer"
+    },
+    "type": {
+      "description": "GTS schema identifier",
+      "format": "gts-schema-id",
+      "title": "GTS Schema ID",
+      "type": "string",
+      "x-gts-ref": "gts.*"
+    }
+  },
+  "required": [
+    "channel",
+    "data",
+    "recipient",
+    "severity",
+    "type"
+  ],
+  "title": "ThreeAlertBaseV1",
+  "type": "object"
+}

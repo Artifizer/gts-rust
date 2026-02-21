@@ -1,0 +1,22 @@
+{
+  "$id": "gts://gts.x.test.const.types.v1~x.test.types.bool_false.v1~",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "allOf": [
+    {
+      "$ref": "gts://gts.x.test.const.types.v1~"
+    },
+    {
+      "properties": {
+        "enabled": {
+          "const": false
+        },
+        "type": {
+          "const": "gts.x.test.const.types.v1~x.test.types.bool_false.v1~"
+        }
+      }
+    }
+  ],
+  "description": "Bool false const",
+  "title": "BoolFalseConstV1 (extends AllTypesBaseV1)",
+  "type": "object"
+}

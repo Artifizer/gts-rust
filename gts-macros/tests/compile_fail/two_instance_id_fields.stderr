@@ -1,0 +1,8 @@
+error[E0599]: no function or associated item named `new_instance_with_defaults` found for struct `TwoInstanceIdBaseV1<M>` in the current scope
+  --> tests/compile_fail/two_instance_id_fields.rs:28:40
+   |
+16 | pub struct TwoInstanceIdBaseV1<M> {
+   | --------------------------------- function or associated item `new_instance_with_defaults` not found for this struct
+...
+28 |     let _ = TwoInstanceIdBaseV1::<()>::new_instance_with_defaults();
+   |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^ function or associated item not found in `TwoInstanceIdBaseV1<()>`

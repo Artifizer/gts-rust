@@ -765,7 +765,8 @@ mod tests {
         // Test GTS instance ID serialization/deserialization for macro-generated structs with empty nested types
 
         // Create instance ID using the macro-generated method
-        let instance_id = TopicV1::<OrderTopicConfigV1>::gts_make_instance_id("test-topic");
+        let instance_id =
+            TopicV1::<OrderTopicConfigV1>::gts_make_instance_id("x.test.orders.topic.v1");
 
         // Serialize the instance ID
         let serialized = serde_json::to_string(&instance_id).expect("Serialization should succeed");
@@ -779,7 +780,7 @@ mod tests {
         // Verify the instance ID contains the expected GTS ID chain
         let id_str = instance_id.as_ref();
         assert!(id_str.contains("gts.x.core.events.topic.v1~"));
-        assert!(id_str.ends_with("test-topic"));
+        assert!(id_str.ends_with("x.test.orders.topic.v1"));
         // Note: gts_make_instance_id uses the schema ID of the type it's called on (TopicV1),
         // not the generic parameter (OrderTopicConfigV1)
     }
@@ -1115,10 +1116,11 @@ mod tests {
         assert!(serialized.contains("orders"));
 
         // Test instance ID generation
-        let instance_id =
-            TopicV1WithIdV1::<OrderTopicConfigV1>::gts_make_instance_id("test-instance");
+        let instance_id = TopicV1WithIdV1::<OrderTopicConfigV1>::gts_make_instance_id(
+            "x.test.orders.instance.v1",
+        );
         assert!(instance_id.as_ref().contains("gts.x.core.events.topic.v1~"));
-        assert!(instance_id.as_ref().ends_with("test-instance"));
+        assert!(instance_id.as_ref().ends_with("x.test.orders.instance.v1"));
 
         // Validate instance against schema
         let mut topic_json = serde_json::to_value(&topic).unwrap();

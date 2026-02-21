@@ -2,7 +2,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{
     Data, DeriveInput, Fields, LitStr, Token,
     parse::{Parse, ParseStream},
@@ -217,12 +217,18 @@ fn has_matching_serde_rename(field: &syn::Field, names: &[&str]) -> bool {
     get_serde_rename(field).is_some_and(|rename| names.contains(&rename.as_str()))
 }
 
+/// Normalise a field ident string by stripping the `r#` raw-identifier prefix.
+/// e.g. `r#type` -> `"type"`, `foo` -> `"foo"`.
+fn strip_raw_prefix(ident_str: &str) -> &str {
+    ident_str.strip_prefix("r#").unwrap_or(ident_str)
+}
+
 /// Check if a field name matches any of the given names
 fn field_name_matches(field: &syn::Field, names: &[&str]) -> bool {
-    field
-        .ident
-        .as_ref()
-        .is_some_and(|name| names.contains(&name.to_string().as_str()))
+    field.ident.as_ref().is_some_and(|ident| {
+        let s = ident.to_string();
+        names.contains(&strip_raw_prefix(&s))
+    })
 }
 
 /// Validate base struct field requirements
@@ -469,14 +475,18 @@ fn remove_derives(input: &mut syn::DeriveInput, traits_to_remove: &[&str]) {
 /// For nested structs (`base = ParentStruct`), Serialize and Deserialize are NOT added.
 /// This prevents direct serialization of nested structs - they can only be serialized
 /// through their base struct wrapper.
-fn add_missing_derives(input: &mut syn::DeriveInput, base: &BaseAttr) {
+fn add_missing_derives(input: &mut syn::DeriveInput, base: &BaseAttr, is_unit: bool) {
     // For nested structs (base = ParentStruct), only add JsonSchema
     // Serialize/Deserialize will be provided via GtsSerialize/GtsDeserialize traits
     let is_nested = matches!(base, BaseAttr::Parent(_));
 
     let derives_to_add: Vec<&str> = if is_nested {
-        // Nested struct: only JsonSchema
-        [("JsonSchema", "schemars::JsonSchema")]
+        // Nested unit structs also need Default so the base's new_instance_with_defaults M:Default bound is satisfied.
+        let mut needed: Vec<(&str, &str)> = vec![("JsonSchema", "schemars::JsonSchema")];
+        if is_unit {
+            needed.push(("Default", "Default"));
+        }
+        needed
             .into_iter()
             .filter(|(check, _)| !has_derive(input, check))
             .map(|(_, full)| full)
@@ -619,6 +629,108 @@ enum BaseAttr {
     Parent(syn::Ident),
 }
 
+/// Parse `const_values = "field1=val1,field2='val, with comma',field3='can\\'t'"`
+/// into typed key-value pairs.
+///
+/// - **Single-quoted values** (`'...'`): taken as JSON strings verbatim, commas inside are
+///   allowed, and `\'` within the value is an escaped single quote.
+/// - **Unquoted values**: if the token parses as `i64` it becomes a JSON integer, otherwise
+///   a JSON string. Commas terminate unquoted values.
+fn parse_const_values_str(s: &str) -> Result<Vec<(String, serde_json::Value)>, String> {
+    let mut result = Vec::new();
+    let mut remaining = s.trim();
+
+    while !remaining.is_empty() {
+        // Locate the key=value separator.
+        let Some(eq_pos) = remaining.find('=') else {
+            let bad_token = remaining.split(',').next().unwrap_or(remaining).trim();
+            return Err(format!(
+                "struct_to_gts_schema: Malformed const_values entry '{bad_token}': \
+                 missing '='. Expected format: field=value or field='value with spaces'"
+            ));
+        };
+        let key = remaining[..eq_pos].trim().to_owned();
+        remaining = remaining[eq_pos + 1..].trim_start();
+        if key.is_empty() {
+            return Err("struct_to_gts_schema: Malformed const_values entry: \
+                 field name before '=' is empty."
+                .to_owned());
+        }
+
+        let val: serde_json::Value;
+
+        if remaining.starts_with('\'') {
+            // Single-quoted string - read until the next unescaped `'`.
+            let chars: Vec<char> = remaining.chars().collect();
+            let mut val_str = String::new();
+            let mut i = 1usize; // skip the opening `'`
+            loop {
+                match chars.get(i) {
+                    None => break,
+                    Some('\'') => {
+                        i += 1;
+                        break;
+                    } // closing quote
+                    Some('\\') => {
+                        i += 1;
+                        match chars.get(i) {
+                            Some('\'') => {
+                                val_str.push('\'');
+                                i += 1;
+                            }
+                            Some(c) => {
+                                val_str.push('\\');
+                                val_str.push(*c);
+                                i += 1;
+                            }
+                            None => break,
+                        }
+                    }
+                    Some(c) => {
+                        val_str.push(*c);
+                        i += 1;
+                    }
+                }
+            }
+            let consumed: usize = chars[..i].iter().map(|c| c.len_utf8()).sum();
+            remaining = &remaining[consumed..];
+            val = serde_json::Value::String(val_str);
+        } else {
+            // Unquoted - terminated by `,` or end of string.
+            let comma_pos = remaining.find(',').unwrap_or(remaining.len());
+            let val_str = remaining[..comma_pos].trim();
+            val = if val_str == "true" {
+                serde_json::Value::Bool(true)
+            } else if val_str == "false" {
+                serde_json::Value::Bool(false)
+            } else if let Ok(n) = val_str.parse::<i64>() {
+                serde_json::Value::Number(n.into())
+            } else if let Ok(f) = val_str.parse::<f64>() {
+                // Return an error instead of silently coercing to 0.
+                if let Some(n) = serde_json::Number::from_f64(f) {
+                    serde_json::Value::Number(n)
+                } else {
+                    return Err(format!(
+                        "struct_to_gts_schema: const_values value '{val_str}' is not a valid JSON \
+                         number (NaN and Infinity are not supported in JSON). \
+                         Use a single-quoted string if you need this as text: '{val_str}'"
+                    ));
+                }
+            } else {
+                serde_json::Value::String(val_str.to_owned())
+            };
+            remaining = &remaining[comma_pos..];
+        }
+
+        result.push((key, val));
+
+        // Skip the field separator (`,`) and any surrounding whitespace.
+        remaining = remaining.trim_start_matches(|c: char| c == ',' || c.is_whitespace());
+    }
+
+    Ok(result)
+}
+
 /// Arguments for the `struct_to_gts_schema` macro
 struct GtsSchemaArgs {
     dir_path: String,
@@ -626,6 +738,9 @@ struct GtsSchemaArgs {
     description: String,
     properties: String,
     base: BaseAttr,
+    /// Field-level `const` constraints injected into the generated JSON Schema.
+    /// Parsed from `const_values = "field=value,..."`.
+    const_values: Vec<(String, serde_json::Value)>,
 }
 
 impl Parse for GtsSchemaArgs {
@@ -635,6 +750,7 @@ impl Parse for GtsSchemaArgs {
         let mut description: Option<String> = None;
         let mut properties: Option<String> = None;
         let mut base: Option<BaseAttr> = None;
+        let mut const_values: Vec<(String, serde_json::Value)> = Vec::new();
 
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
@@ -706,10 +822,15 @@ impl Parse for GtsSchemaArgs {
                         ));
                     }
                 }
+                "const_values" => {
+                    let value: LitStr = input.parse()?;
+                    const_values = parse_const_values_str(&value.value())
+                        .map_err(|e| syn::Error::new(value.span(), e))?;
+                }
                 _ => {
                     return Err(syn::Error::new_spanned(
                         key,
-                        "Unknown attribute. Expected: dir_path, schema_id, description, properties, or base",
+                        "Unknown attribute. Expected: dir_path, schema_id, description, properties, base, or const_values",
                     ));
                 }
             }
@@ -730,6 +851,7 @@ impl Parse for GtsSchemaArgs {
                 .ok_or_else(|| input.error("Missing required attribute: properties"))?,
             base: base
                 .ok_or_else(|| input.error("Missing required attribute: base (use 'base = true' for base types or 'base = ParentStruct' for child types)"))?,
+            const_values,
         })
     }
 }
@@ -741,12 +863,12 @@ impl Parse for GtsSchemaArgs {
 /// ## 1. Compile-Time Validation & Guarantees
 ///
 /// The macro validates your annotations at compile time, catching errors early:
-/// - ✅ All required attributes exist (`dir_path`, `schema_id`, `description`, `properties`)
-/// - ✅ Every property in `properties` exists as a field in the struct
-/// - ✅ Only structs with named fields are supported (no tuple/unit structs or enums)
-/// - ✅ Single generic parameter maximum (prevents inheritance ambiguity)
-/// - ✅ Valid GTS ID format enforcement
-/// - ✅ Zero runtime allocation for generated constants
+/// - All required attributes exist (`dir_path`, `schema_id`, `description`, `properties`)
+/// - Every property in `properties` exists as a field in the struct
+/// - Only structs with named fields are supported (no tuple/unit structs or enums)
+/// - Single generic parameter maximum (prevents inheritance ambiguity)
+/// - Valid GTS ID format enforcement
+/// - Zero runtime allocation for generated constants
 ///
 /// ## 2. Schema Generation
 ///
@@ -849,7 +971,7 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
     let property_names: Vec<String> = args
         .properties
         .split(',')
-        .map(|s| s.trim().to_owned())
+        .map(|s| strip_raw_prefix(s.trim()).to_owned())
         .filter(|s| !s.is_empty())
         .collect();
 
@@ -891,11 +1013,18 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
         }
     };
 
+    // Determine early (used for add_missing_derives and later in code generation)
+    let is_unit_struct = struct_fields.is_none();
+
     // Validate that all requested properties exist (only for structs with fields)
     if let Some(fields) = struct_fields {
         let available_fields: Vec<String> = fields
             .iter()
-            .filter_map(|f| f.ident.as_ref().map(ToString::to_string))
+            .filter_map(|f| {
+                f.ident
+                    .as_ref()
+                    .map(|id| strip_raw_prefix(&id.to_string()).to_owned())
+            })
             .collect();
 
         for prop in &property_names {
@@ -915,6 +1044,17 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
         if let Err(err) = validate_base_struct_fields(&input, fields, &args) {
             return err.to_compile_error().into();
         }
+    }
+
+    // Reject const_values on base structs - they have no parent to override.
+    if matches!(args.base, BaseAttr::IsBase) && !args.const_values.is_empty() {
+        return syn::Error::new_spanned(
+            &input.ident,
+            "struct_to_gts_schema: `const_values` is not allowed on base structs (`base = true`). \
+             const_values only applies to derived structs that extend a parent via `base = ParentStruct`.",
+        )
+        .to_compile_error()
+        .into();
     }
 
     // Validate version match between struct name suffix and schema_id
@@ -948,7 +1088,7 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
 
     // Automatically add required derives: Serialize, Deserialize, JsonSchema
     // For nested structs, only JsonSchema is added (no direct serialization)
-    add_missing_derives(&mut modified_input, &args.base);
+    add_missing_derives(&mut modified_input, &args.base, is_unit_struct);
 
     // For base structs with generic fields, add serde attributes for GtsSerialize/GtsDeserialize
     add_gts_serde_attrs(&mut modified_input, &args.base);
@@ -961,6 +1101,7 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
 
     // Build the schema output file path from dir_path + schema_id
     let struct_name = &input.ident;
+    let meta_ident = format_ident!("_GtsParent_{}", struct_name);
     let dir_path = &args.dir_path;
     let schema_id = &args.schema_id;
     let description = &args.description;
@@ -1043,16 +1184,14 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
                 "struct_to_gts_schema: Base struct '{parent_ident}' must have exactly 1 generic field. \
                  Parent types must define a generic field (e.g., `pub payload: P`) that child types extend."
             );
+            let parent_meta = format_ident!("_GtsParent_{}", parent_ident);
             quote! {
                 // Compile-time assertion: verify parent struct's GTS_SCHEMA_ID matches expected parent segment
-                // We use <ParentStruct<()> as GtsSchema> since all GTS structs must be generic
+                // Uses the hidden marker type to avoid <ParentType<()>> syntax (supports non-generic parents).
                 const _: () = {
-                    // Use a const assertion to verify at compile time
-                    const PARENT_ID: &'static str = <#parent_ident<()> as ::gts::GtsSchema>::SCHEMA_ID;
+                    const PARENT_ID: &'static str = #parent_meta::SCHEMA_ID;
                     const EXPECTED_ID: &'static str = #parent_id;
-                    // Use a manual string comparison for const context
                     const _: () = {
-                        // Manual string equality check for const context
                         if PARENT_ID.as_bytes().len() != EXPECTED_ID.as_bytes().len() {
                             panic!(#schema_id_assertion_msg);
                         }
@@ -1066,10 +1205,18 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
                     };
                 };
 
+                // Compile-time assertion: parent must be a generic GTS type.
+                // Non-generic (leaf/terminal) types cannot be extended.
+                const _: () = {
+                    if !#parent_meta::IS_GENERIC {
+                        panic!("Parent struct is not a generic GTS type and cannot be extended. Use `base = true` to start a new schema hierarchy.");
+                    }
+                };
+
                 // Compile-time assertion: verify parent struct has exactly 1 generic field
                 const _: () = {
-                    const PARENT_GENERIC_FIELD: Option<&'static str> = <#parent_ident<()> as ::gts::GtsSchema>::GENERIC_FIELD;
-                    if PARENT_GENERIC_FIELD.is_none() {
+                    const PARENT_GENERIC_FIELD: Option<&'static str> = #parent_meta::GENERIC_FIELD;
+                    if PARENT_GENERIC_FIELD.is_none() && #parent_meta::IS_GENERIC {
                         panic!(#generic_field_assertion_msg);
                     }
                 };
@@ -1092,6 +1239,164 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
         where_clause,
         "::gts::GtsSerialize + ::gts::GtsSchema",
     );
+
+    // Helper: build the `serde_json::json!({"const": <val>})` token stream for a value.
+    let make_const_json_val = |val: &serde_json::Value| -> proc_macro2::TokenStream {
+        match val {
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    let lit = proc_macro2::Literal::i64_suffixed(i);
+                    quote! { serde_json::json!({ "const": #lit }) }
+                } else if let Some(f) = n.as_f64() {
+                    let lit = proc_macro2::Literal::f64_suffixed(f);
+                    quote! { serde_json::json!({ "const": #lit }) }
+                } else {
+                    let s = val.to_string();
+                    quote! { serde_json::json!({ "const": #s }) }
+                }
+            }
+            serde_json::Value::String(s) => {
+                quote! { serde_json::json!({ "const": #s }) }
+            }
+            serde_json::Value::Bool(b) => {
+                quote! { serde_json::json!({ "const": #b }) }
+            }
+            _ => {
+                let s = val.to_string();
+                quote! { serde_json::json!({ "const": #s }) }
+            }
+        }
+    };
+
+    // Collect the child struct's own field names (stripped of r# prefix) so we can
+    // distinguish child-owned consts from parent-level consts.
+    let child_field_names: Vec<String> = struct_fields
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(|f| {
+                    f.ident
+                        .as_ref()
+                        .map(|id| strip_raw_prefix(&id.to_string()).to_owned())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Generate runtime code that inserts `{ "const": <val> }` entries into a mutable
+    // `nested_properties` Value::Object, one entry per const_value pair.
+    //
+    // All const_values are inserted at the top level of `nested_properties` (parent-level).
+    // This is correct for the generic path (L2 struct) where const_values target parent fields.
+    // For the non-generic path a separate `child_const_injection_code` handles child-owned fields.
+    let const_injection_code: proc_macro2::TokenStream = {
+        let insertions: Vec<proc_macro2::TokenStream> = args
+            .const_values
+            .iter()
+            .map(|(key, val)| {
+                let json_val_tokens = make_const_json_val(val);
+                quote! {
+                    if let Some(__props_map) = nested_properties.as_object_mut() {
+                        __props_map.insert(#key.to_owned(), #json_val_tokens);
+                    }
+                }
+            })
+            .collect();
+        quote! { #(#insertions)* }
+    };
+
+    // For the non-generic path: inject child-owned consts inside the nested sub-object
+    // (under the parent's generic field), and parent-level consts at the top level.
+    // Child-owned = fields that exist on this struct itself.
+    let parent_const_injection_code: proc_macro2::TokenStream = {
+        let insertions: Vec<proc_macro2::TokenStream> = args
+            .const_values
+            .iter()
+            .filter(|(k, _)| !child_field_names.contains(k))
+            .map(|(key, val)| {
+                let json_val_tokens = make_const_json_val(val);
+                quote! {
+                    if let Some(__props_map) = nested_properties.as_object_mut() {
+                        __props_map.insert(#key.to_owned(), #json_val_tokens);
+                    }
+                }
+            })
+            .collect();
+        quote! { #(#insertions)* }
+    };
+
+    // Child-owned consts: injected inside nested_properties[field_name]["properties"].
+    // `__child_field` is bound at the call site to the parent's generic field name.
+    let child_const_injection_code: proc_macro2::TokenStream = {
+        let insertions: Vec<proc_macro2::TokenStream> = args
+            .const_values
+            .iter()
+            .filter(|(k, _)| child_field_names.contains(k))
+            .map(|(key, val)| {
+                let json_val_tokens = make_const_json_val(val);
+                quote! {
+                    if let Some(__outer) = nested_properties.as_object_mut() {
+                        if let Some(__inner_obj) = __outer.get_mut(__child_field) {
+                            if let Some(__inner_props) = __inner_obj
+                                .get_mut("properties")
+                                .and_then(|v| v.as_object_mut())
+                            {
+                                __inner_props.insert(#key.to_owned(), #json_val_tokens);
+                            }
+                        }
+                    }
+                }
+            })
+            .collect();
+        quote! { #(#insertions)* }
+    };
+    // Use `let mut` when there are const values to inject OR for derived structs (GtsSchemaId auto-inject).
+    let is_derived = matches!(&args.base, BaseAttr::Parent(_));
+    let nested_props_let = if args.const_values.is_empty() && !is_derived {
+        quote! { let nested_properties }
+    } else {
+        quote! { let mut nested_properties }
+    };
+
+    // Detect which fields carry GtsSchemaId / GtsInstanceId (only meaningful for base structs).
+    let gts_schema_id_field: Option<String> = struct_fields.and_then(|fields| {
+        fields
+            .iter()
+            .find(|f| is_type_gts_schema_id(&f.ty))
+            .and_then(|f| {
+                f.ident
+                    .as_ref()
+                    .map(|id| strip_raw_prefix(&id.to_string()).to_owned())
+            })
+    });
+    let gts_instance_id_field: Option<String> = struct_fields.and_then(|fields| {
+        fields
+            .iter()
+            .find(|f| is_type_gts_instance_id(&f.ty))
+            .and_then(|f| {
+                f.ident
+                    .as_ref()
+                    .map(|id| strip_raw_prefix(&id.to_string()).to_owned())
+            })
+    });
+
+    // For derived structs: auto-inject a `const` for the parent's GtsSchemaId field into the schema.
+    let schema_id_auto_inject_code: proc_macro2::TokenStream = match &args.base {
+        BaseAttr::Parent(parent_ident) => {
+            let parent_meta = format_ident!("_GtsParent_{}", parent_ident);
+            quote! {
+                if let Some(__sid_field) = #parent_meta::GTS_SCHEMA_ID_FIELD_NAME {
+                    if let Some(__props_map) = nested_properties.as_object_mut() {
+                        __props_map.insert(
+                            __sid_field.to_owned(),
+                            serde_json::json!({ "const": Self::SCHEMA_ID }),
+                        );
+                    }
+                }
+            }
+        }
+        BaseAttr::IsBase => quote! {},
+    };
 
     let gts_schema_impl = if has_generic {
         let generic_param = input.generics.type_params().next().unwrap();
@@ -1219,7 +1524,9 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
                 let innermost_generic_field = <#generic_ident as ::gts::GtsSchema>::GENERIC_FIELD;
 
                 // Wrap properties in the nesting path
-                let nested_properties = Self::wrap_in_nesting_path(&nesting_path, properties, required.clone(), innermost_generic_field);
+                #nested_props_let = Self::wrap_in_nesting_path(&nesting_path, properties, required.clone(), innermost_generic_field);
+                #const_injection_code
+                #schema_id_auto_inject_code
 
                 // Child type - use allOf with $ref to parent
                 serde_json::json!({
@@ -1242,9 +1549,10 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
         // generic field name at compile time to properly nest the child properties
         let parent_generic_field_code = match &args.base {
             BaseAttr::Parent(parent_ident) => {
+                let parent_meta = format_ident!("_GtsParent_{}", parent_ident);
                 quote! {
                     // Get the parent's generic field name for nesting
-                    let parent_generic_field: Option<&'static str> = <#parent_ident<()> as ::gts::GtsSchema>::GENERIC_FIELD;
+                    let parent_generic_field: Option<&'static str> = #parent_meta::GENERIC_FIELD;
                 }
             }
             BaseAttr::IsBase => {
@@ -1321,13 +1629,43 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
                 // Get the parent's generic field name for nesting child properties
                 #parent_generic_field_code
 
-                // Child type - use allOf with $ref to parent
-                // Parent MUST have a generic field - this is enforced by compile-time assertion
+                // When the parent has no generic field (e.g. a non-generic intermediate struct),
+                // fall back to the flat allOf[1] schema (same as the unit-struct early-return path).
+                if parent_generic_field.is_none() {
+                    let mut nested_properties = serde_json::json!({ "properties": {} });
+                    if let Some(props_obj) = properties.as_object() {
+                        if !props_obj.is_empty() {
+                            for (k, v) in props_obj {
+                                if let Some(np) = nested_properties["properties"].as_object_mut() {
+                                    np.insert(k.clone(), v.clone());
+                                }
+                            }
+                        }
+                    }
+                    #const_injection_code
+                    #schema_id_auto_inject_code
+                    return serde_json::json!({
+                        "$id": format!("gts://{}", schema_id),
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "type": "object",
+                        "allOf": [
+                            { "$ref": format!("gts://{}", parent_schema_id) },
+                            nested_properties
+                        ]
+                    });
+                }
+
                 let field_name = parent_generic_field
-                    .expect("Parent struct must have a generic field for derived types to extend");
+                    .expect("unreachable: none case handled above");
 
                 // Wrap properties in the parent's generic field path
-                let nested_properties = Self::wrap_in_nesting_path(&[field_name], properties, required, None);
+                #nested_props_let = Self::wrap_in_nesting_path(&[field_name], properties, required, None);
+                // Inject parent-level consts at the top of nested_properties.
+                let __child_field = field_name;
+                #parent_const_injection_code
+                // Inject child-owned consts inside nested_properties[field_name]["properties"].
+                #child_const_injection_code
+                #schema_id_auto_inject_code
                 serde_json::json!({
                     "$id": format!("gts://{}", schema_id),
                     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1711,6 +2049,255 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
         quote! {}
     };
 
+    // Field name token streams for the impl-block constants.
+    let gts_schema_id_field_opt = gts_schema_id_field
+        .as_deref()
+        .map_or(quote! { None }, |name| quote! { Some(#name) });
+    let gts_instance_id_field_opt = gts_instance_id_field
+        .as_deref()
+        .map_or(quote! { None }, |name| quote! { Some(#name) });
+
+    // Object-creation helpers for BASE structs that have named fields.
+    let object_creation_helpers: proc_macro2::TokenStream = if matches!(
+        &args.base,
+        BaseAttr::IsBase
+    ) {
+        if let Some(fields) = struct_fields {
+            // Count GtsInstanceId and GtsSchemaId fields.
+            // new_instance_with_defaults() is only generated when there is at most one of
+            // each -- otherwise it would be ambiguous which field to populate.
+            let instance_id_count = fields
+                .iter()
+                .filter(|f| is_type_gts_instance_id(&f.ty))
+                .count();
+            let schema_id_count = fields
+                .iter()
+                .filter(|f| is_type_gts_schema_id(&f.ty))
+                .count();
+            let has_instance_id = instance_id_count == 1;
+            // Skip generating new_instance_with_defaults() when ambiguous.
+            let unambiguous = instance_id_count <= 1 && schema_id_count <= 1;
+
+            let default_where_clause =
+                build_where_clause(generics, where_clause, "Default + ::gts::GtsSchema");
+
+            // Determine the schema_id source token: M::SCHEMA_ID for generic,
+            // <Self as ::gts::GtsSchema>::SCHEMA_ID for non-generic.
+            let schema_id_expr: proc_macro2::TokenStream =
+                if let Some(gp) = generics.type_params().next() {
+                    let gi = &gp.ident;
+                    quote! { <#gi as ::gts::GtsSchema>::SCHEMA_ID }
+                } else {
+                    quote! { <Self as ::gts::GtsSchema>::SCHEMA_ID }
+                };
+
+            // Build field initialisers.  The instance_segment ident is only
+            // referenced when has_instance_id == true, which matches the
+            // generated signature.
+            let field_inits: Vec<proc_macro2::TokenStream> = fields
+                    .iter()
+                    .map(|f| {
+                        let ident = f.ident.as_ref().unwrap();
+                        if is_type_gts_schema_id(&f.ty) {
+                            quote! { #ident: ::gts::GtsSchemaId::new(#schema_id_expr) }
+                        } else if is_type_gts_instance_id(&f.ty) {
+                            quote! { #ident: ::gts::GtsInstanceId::new(#schema_id_expr, instance_segment) }
+                        } else {
+                            quote! { #ident: Default::default() }
+                        }
+                    })
+                    .collect();
+
+            if unambiguous {
+                let method = if has_instance_id {
+                    quote! {
+                        /// Create an instance with all fields set to defaults.
+                        ///
+                        /// `GtsSchemaId` fields are set to `M::SCHEMA_ID`.
+                        /// The single `GtsInstanceId` field is constructed from
+                        /// `M::SCHEMA_ID` + `instance_segment`.
+                        /// All other fields use `Default::default()`.
+                        #[allow(dead_code)]
+                        pub fn new_instance_with_defaults(instance_segment: &str) -> Self {
+                            Self { #(#field_inits,)* }
+                        }
+                    }
+                } else {
+                    // Suppress the unused `instance_segment` variable in field_inits.
+                    // Since has_instance_id is false, the GtsInstanceId branch is never hit,
+                    // but we still bind the name to avoid "unused variable" warnings.
+                    quote! {
+                        /// Create an instance with all fields set to defaults.
+                        ///
+                        /// `GtsSchemaId` fields are set to `M::SCHEMA_ID`.
+                        /// All other fields use `Default::default()`.
+                        #[allow(dead_code)]
+                        pub fn new_instance_with_defaults() -> Self {
+                            #[allow(unused_variables)]
+                            let instance_segment = "";
+                            Self { #(#field_inits,)* }
+                        }
+                    }
+                };
+                quote! {
+                    impl #impl_generics #struct_name #ty_generics #default_where_clause {
+                        #method
+                    }
+                }
+            } else {
+                quote! {}
+            }
+        } else {
+            quote! {}
+        }
+    } else {
+        quote! {}
+    };
+
+    // `new_instance_with_defaults()` for derived structs with const_values.
+    // - Unit structs: all const_values target parent fields directly.
+    // - Non-unit non-generic leaf structs (properties=""): const_values matching the child's own
+    //   fields are applied via a generated `Default` impl; remaining const_values target parent
+    //   fields via `new_instance_with_defaults()`.
+    let derived_gts_new: proc_macro2::TokenStream = if args.const_values.is_empty() {
+        quote! {}
+    } else if let BaseAttr::Parent(parent_ident) = &args.base {
+        // Helper: build (field_tokens, val_expr) for a const_value entry.
+        let build_override = |key: &str,
+                              val: &serde_json::Value|
+         -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
+            let field_tokens: proc_macro2::TokenStream = {
+                const KEYWORDS: &[&str] = &[
+                    "type", "ref", "self", "super", "fn", "let", "match", "use", "where", "while",
+                    "for", "if", "else", "return", "struct", "enum", "impl", "trait", "mod", "pub",
+                    "in",
+                ];
+                if KEYWORDS.contains(&key) {
+                    format!("r#{key}").parse().unwrap()
+                } else {
+                    key.parse::<proc_macro2::TokenStream>().unwrap()
+                }
+            };
+            let val_expr: proc_macro2::TokenStream = match val {
+                serde_json::Value::Number(n) => {
+                    if let Some(i) = n.as_i64() {
+                        let lit = proc_macro2::Literal::i64_unsuffixed(i);
+                        quote! { #lit }
+                    } else if let Some(f) = n.as_f64() {
+                        let lit = proc_macro2::Literal::f64_unsuffixed(f);
+                        quote! { #lit }
+                    } else {
+                        let s = val.to_string();
+                        quote! { #s.to_owned() }
+                    }
+                }
+                serde_json::Value::String(s) => quote! { #s.to_owned() },
+                serde_json::Value::Bool(b) => quote! { #b },
+                _ => {
+                    let s = val.to_string();
+                    quote! { #s.to_owned() }
+                }
+            };
+            (field_tokens, val_expr)
+        };
+
+        if is_unit_struct {
+            // Unit struct: all const_values are parent-level overrides.
+            let override_stmts: Vec<proc_macro2::TokenStream> = args
+                .const_values
+                .iter()
+                .map(|(key, val)| {
+                    let (ft, ve) = build_override(key, val);
+                    quote! { __instance.#ft = #ve; }
+                })
+                .collect();
+
+            quote! {
+                impl #struct_name {
+                    /// Create a `#parent_ident<Self>` with all fields set to defaults and
+                    /// `const_values` overrides applied.
+                    #[allow(dead_code, unused_mut)]
+                    pub fn new_instance_with_defaults() -> #parent_ident<#struct_name> {
+                        let mut __instance =
+                            <#parent_ident::<#struct_name>>::new_instance_with_defaults();
+                        #(#override_stmts)*
+                        __instance
+                    }
+                }
+            }
+        } else if let Some(fields) = struct_fields
+            .filter(|_| generic_param_name.is_none() && args.properties.trim().is_empty())
+        {
+            // Non-unit non-generic leaf struct (properties=""):
+            // partition const_values into child-own vs parent-level.
+            let child_field_names: Vec<String> = fields
+                .iter()
+                .filter_map(|f| {
+                    f.ident
+                        .as_ref()
+                        .map(|id| strip_raw_prefix(&id.to_string()).to_owned())
+                })
+                .collect();
+
+            // Child-level overrides applied inside a generated Default impl.
+            let child_override_stmts: Vec<proc_macro2::TokenStream> = args
+                .const_values
+                .iter()
+                .filter(|(k, _)| child_field_names.contains(k))
+                .map(|(key, val)| {
+                    let (ft, ve) = build_override(key, val);
+                    quote! { __inst.#ft = #ve; }
+                })
+                .collect();
+
+            // Parent-level overrides applied after parent's new_instance_with_defaults().
+            let parent_override_stmts: Vec<proc_macro2::TokenStream> = args
+                .const_values
+                .iter()
+                .filter(|(k, _)| !child_field_names.contains(k))
+                .map(|(key, val)| {
+                    let (ft, ve) = build_override(key, val);
+                    quote! { __instance.#ft = #ve; }
+                })
+                .collect();
+
+            // Build field initialisers for Default::default().
+            let field_defaults: Vec<proc_macro2::TokenStream> = fields
+                .iter()
+                .map(|f| {
+                    let ident = f.ident.as_ref().unwrap();
+                    quote! { #ident: Default::default() }
+                })
+                .collect();
+
+            quote! {
+                impl Default for #struct_name {
+                    fn default() -> Self {
+                        let mut __inst = Self { #(#field_defaults,)* };
+                        #(#child_override_stmts)*
+                        __inst
+                    }
+                }
+
+                impl #struct_name {
+                    /// Create a `#parent_ident<Self>` with all fields set to defaults and
+                    /// `const_values` overrides applied.
+                    #[allow(dead_code, unused_mut)]
+                    pub fn new_instance_with_defaults() -> #parent_ident<#struct_name> {
+                        let mut __instance =
+                            <#parent_ident::<#struct_name>>::new_instance_with_defaults();
+                        #(#parent_override_stmts)*
+                        __instance
+                    }
+                }
+            }
+        } else {
+            quote! {}
+        }
+    } else {
+        quote! {}
+    };
+
     // For nested structs, we don't generate instance serialization methods (gts_instance_json, etc.)
     // because they don't have Serialize. Instead, they must be serialized through their base struct.
     let instance_methods_impl = if matches!(&args.base, BaseAttr::Parent(_)) {
@@ -1774,6 +2361,16 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
 
             #base_schema_id_const
 
+            /// Name of the field with type `GtsSchemaId`, if any.
+            #[doc(hidden)]
+            #[allow(dead_code)]
+            const GTS_SCHEMA_ID_FIELD_NAME: Option<&'static str> = #gts_schema_id_field_opt;
+
+            /// Name of the field with type `GtsInstanceId`, if any.
+            #[doc(hidden)]
+            #[allow(dead_code)]
+            const GTS_INSTANCE_ID_FIELD_NAME: Option<&'static str> = #gts_instance_id_field_opt;
+
             /// Get the GTS schema identifier as a static reference.
             #[allow(dead_code)]
             #[must_use]
@@ -1836,6 +2433,25 @@ pub fn struct_to_gts_schema(attr: TokenStream, item: TokenStream) -> TokenStream
 
         // Instance serialization methods (only for base structs)
         #instance_methods_impl
+
+        // Object-creation helpers for base structs
+        #object_creation_helpers
+
+        // new_instance_with_defaults() for derived unit structs (const_values applied)
+        #derived_gts_new
+
+        // Hidden non-generic marker type: exposes schema constants without type parameters.
+        // Used by child structs to check parent schema metadata at compile time.
+        #[doc(hidden)]
+        #[allow(non_camel_case_types, dead_code)]
+        struct #meta_ident;
+        impl #meta_ident {
+            const SCHEMA_ID: &'static str = #schema_id;
+            const GENERIC_FIELD: Option<&'static str> = #generic_field_option;
+            const GTS_SCHEMA_ID_FIELD_NAME: Option<&'static str> = #gts_schema_id_field_opt;
+            /// True when the struct itself is generic (has a type parameter).
+            const IS_GENERIC: bool = #has_generic;
+        }
     };
 
     TokenStream::from(expanded)

@@ -1,0 +1,25 @@
+{
+  "$id": "gts://gts.x.core.err.error.v1~x.core.http.unprocessable.v1~",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "allOf": [
+    {
+      "$ref": "gts://gts.x.core.err.error.v1~"
+    },
+    {
+      "properties": {
+        "http_status": {
+          "const": 422
+        },
+        "message": {
+          "const": "Invalid input: field required, value missing"
+        },
+        "type": {
+          "const": "gts.x.core.err.error.v1~x.core.http.unprocessable.v1~"
+        }
+      }
+    }
+  ],
+  "description": "HTTP 422 Unprocessable Entity",
+  "title": "UnprocessableMetadataV1 (extends BaseErrorV1)",
+  "type": "object"
+}

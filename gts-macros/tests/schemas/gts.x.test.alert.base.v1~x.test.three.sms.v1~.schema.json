@@ -1,0 +1,28 @@
+{
+  "$id": "gts://gts.x.test.alert.base.v1~x.test.three.sms.v1~",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "allOf": [
+    {
+      "$ref": "gts://gts.x.test.alert.base.v1~"
+    },
+    {
+      "properties": {
+        "channel": {
+          "const": "sms"
+        },
+        "kind": {
+          "const": "traffic"
+        },
+        "severity": {
+          "const": 9
+        },
+        "type": {
+          "const": "gts.x.test.alert.base.v1~x.test.three.sms.v1~"
+        }
+      }
+    }
+  ],
+  "description": "SMS alert unit struct (channel='sms', severity=9, kind='traffic')",
+  "title": "ThreeSmsAlertDataV1 (extends ThreeAlertBaseV1)",
+  "type": "object"
+}

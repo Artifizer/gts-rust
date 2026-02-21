@@ -1,0 +1,36 @@
+{
+  "$id": "gts://gts.x.core.err.error.v1~",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "Base GTS error with HTTP status, message, trace ID and metadata",
+  "properties": {
+    "http_status": {
+      "type": "integer"
+    },
+    "message": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "trace_id": {
+      "type": "string"
+    },
+    "type": {
+      "description": "GTS schema identifier",
+      "format": "gts-schema-id",
+      "title": "GTS Schema ID",
+      "type": "string",
+      "x-gts-ref": "gts.*"
+    }
+  },
+  "required": [
+    "http_status",
+    "message",
+    "metadata",
+    "trace_id",
+    "type"
+  ],
+  "title": "BaseErrorV1",
+  "type": "object"
+}

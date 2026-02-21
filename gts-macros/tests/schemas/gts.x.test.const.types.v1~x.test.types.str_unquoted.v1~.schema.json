@@ -1,0 +1,22 @@
+{
+  "$id": "gts://gts.x.test.const.types.v1~x.test.types.str_unquoted.v1~",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "allOf": [
+    {
+      "$ref": "gts://gts.x.test.const.types.v1~"
+    },
+    {
+      "properties": {
+        "label": {
+          "const": "hello"
+        },
+        "type": {
+          "const": "gts.x.test.const.types.v1~x.test.types.str_unquoted.v1~"
+        }
+      }
+    }
+  ],
+  "description": "Unquoted string const",
+  "title": "StrUnquotedConstV1 (extends AllTypesBaseV1)",
+  "type": "object"
+}

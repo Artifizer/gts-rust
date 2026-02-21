@@ -1,0 +1,29 @@
+{
+  "$id": "gts://gts.x.test.three.event.v1~x.test.three.alert.v1~x.test.three.email.v1~",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "allOf": [
+    {
+      "$ref": "gts://gts.x.test.three.event.v1~x.test.three.alert.v1~"
+    },
+    {
+      "properties": {
+        "channel": {
+          "const": "email"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "to"
+      ]
+    }
+  ],
+  "description": "Email alert data (channel='email')",
+  "title": "ThreeEmailAlertDataV1 (extends ThreeAlertPayloadV1)",
+  "type": "object"
+}

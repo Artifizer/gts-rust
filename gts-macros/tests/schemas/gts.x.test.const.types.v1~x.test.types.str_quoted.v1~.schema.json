@@ -1,0 +1,22 @@
+{
+  "$id": "gts://gts.x.test.const.types.v1~x.test.types.str_quoted.v1~",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "allOf": [
+    {
+      "$ref": "gts://gts.x.test.const.types.v1~"
+    },
+    {
+      "properties": {
+        "label": {
+          "const": "hello world"
+        },
+        "type": {
+          "const": "gts.x.test.const.types.v1~x.test.types.str_quoted.v1~"
+        }
+      }
+    }
+  ],
+  "description": "Single-quoted string const",
+  "title": "StrQuotedConstV1 (extends AllTypesBaseV1)",
+  "type": "object"
+}

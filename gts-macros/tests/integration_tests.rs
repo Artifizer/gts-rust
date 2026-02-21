@@ -208,9 +208,19 @@ fn test_gts_instance_id_versioned_segment() {
 
 #[test]
 fn test_gts_instance_id_empty_segment() {
-    // Edge case: empty segment returns just the schema_id
+    // Edge case: empty segment appends nothing — result equals the schema ID.
     let id = EventTopicV1::gts_make_instance_id("");
     assert_eq!(id, "gts.x.core.events.topic.v1~");
+}
+
+#[test]
+fn test_gts_instance_id_uuid_segment() {
+    // UUID is a valid segment (combined anonymous instance).
+    let id = EventTopicV1::gts_make_instance_id("7a1d2f34-5678-49ab-9012-abcdef123456");
+    assert_eq!(
+        id.as_ref(),
+        "gts.x.core.events.topic.v1~7a1d2f34-5678-49ab-9012-abcdef123456"
+    );
 }
 
 // =============================================================================
@@ -277,7 +287,7 @@ fn test_event_topic_serialization() {
 #[test]
 fn test_product_serialization() {
     let product = ProductV1 {
-        id: ProductV1::gts_make_instance_id("prod-456"), // Non GTS ID
+        id: ProductV1::gts_make_instance_id("x.test.products.sample.v1"),
         name: "Test Product".to_owned(),
         price: 99.99,
         description: Some("A test product".to_owned()),
@@ -286,7 +296,7 @@ fn test_product_serialization() {
     };
 
     let json = serde_json::to_string(&product).unwrap();
-    assert!(json.contains("prod-456"));
+    assert!(json.contains("x.test.products.sample.v1"));
     assert!(json.contains("99.99"));
 }
 
@@ -556,7 +566,7 @@ fn test_multiple_instances_validate_independently() {
             internal_config: Some("config".to_owned()),
         },
         EventTopicV1 {
-            id: EventTopicV1::gts_make_instance_id("x.payments.transactions.v1.0"),
+            id: EventTopicV1::gts_make_instance_id("x.payments.transactions.event.v1.0"),
             name: "transactions".to_owned(),
             description: Some("Payment transactions".to_owned()),
             retention: "P365D".to_owned(),
@@ -1198,10 +1208,10 @@ fn test_base_true_single_segment_schema_id() {
 #[test]
 fn test_base_true_single_segment_instance_id_generation() {
     // Test instance ID generation from base struct
-    let instance_id = SingleSegmentBaseV1::gts_make_instance_id("test.instance.v1");
+    let instance_id = SingleSegmentBaseV1::gts_make_instance_id("x.test.instances.item.v1");
     assert_eq!(
         instance_id.as_ref(),
-        "gts.x.test.single.segment.v1~test.instance.v1"
+        "gts.x.test.single.segment.v1~x.test.instances.item.v1"
     );
 }
 
@@ -1310,9 +1320,9 @@ fn test_schema_additional_properties_false() {
 
 #[test]
 fn test_make_instance_id_with_complex_segment() {
-    let instance_id = EventTopicV1::gts_make_instance_id("vendor.marketplace.orders.v1");
+    let instance_id = EventTopicV1::gts_make_instance_id("vendor.marketplace.orders.event.v1");
     assert_eq!(
         instance_id.as_ref(),
-        "gts.x.core.events.topic.v1~vendor.marketplace.orders.v1"
+        "gts.x.core.events.topic.v1~vendor.marketplace.orders.event.v1"
     );
 }

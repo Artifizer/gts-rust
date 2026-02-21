@@ -838,6 +838,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Const Values Pattern
+
+The optional `const_values` parameter on `#[struct_to_gts_schema]` pins specific fields to fixed JSON `const` values in a derived schema. This is the standard way to model typed sub-schemas (e.g. HTTP error classes) where most fields are predetermined and only a few vary per instance. The `GtsSchemaId` field is always auto-injected as a const — no need to include it explicitly.
+
+Combined with `new_instance_with_defaults()`, the generated constructor applies all const overrides automatically so callers only supply the truly variable fields.
+
+See [`gts-macros` README → The `const_values` Parameter](gts-macros/README.md#the-const_values-parameter) for syntax, value types, and a worked example.
+
 ### HTTP API
 
 Start the server:

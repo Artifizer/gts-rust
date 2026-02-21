@@ -1,15 +1,9 @@
 {
-  "$id": "gts://gts.x.core.events.topic.v1~",
+  "$id": "gts://gts.x.core.events.container.v1~",
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
-  "description": "Event Topic (Stream) definition",
+  "description": "Container with renamed generic field",
   "properties": {
-    "description": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
     "id": {
       "description": "GTS instance identifier",
       "format": "gts-instance-id",
@@ -20,19 +14,15 @@
     "name": {
       "type": "string"
     },
-    "ordering": {
-      "type": "string"
-    },
-    "retention": {
-      "type": "string"
+    "rust_field_name": {
+      "type": "object"
     }
   },
   "required": [
     "id",
     "name",
-    "ordering",
-    "retention"
+    "rust_field_name"
   ],
-  "title": "EventTopicV1",
+  "title": "ContainerV1",
   "type": "object"
 }

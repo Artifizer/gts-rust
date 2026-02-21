@@ -35,6 +35,8 @@ struct MacroAttrs {
     description: Option<String>,
     properties: Option<String>,
     base: BaseAttr,
+    /// Parsed const field overrides (`field_name`, `json_value`)
+    const_values: Vec<(String, serde_json::Value)>,
 }
 
 /// Base attribute type
@@ -217,13 +219,151 @@ fn has_ignore_directive(content: &str) -> bool {
     false
 }
 
+/// Unescape a Rust string literal's content (already stripped of outer `"`) so that
+/// the CLI sees the same string the proc-macro sees after the Rust lexer decodes it.
+/// Only handles the escapes that are relevant in `const_values` strings:
+///   `\\` → `\`, `\'` → `'`, `\"` → `"`, `\n` → newline, `\t` → tab.
+/// Any unrecognised `\X` is left as-is.
+fn unescape_rust_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('\\') | None => out.push('\\'),
+                Some('\'') => out.push('\''),
+                Some('"') => out.push('"'),
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some(x) => {
+                    out.push('\\');
+                    out.push(x);
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+///
+/// - Unquoted: `true`/`false` → bool, integer literal → i64, float → f64, else → String.
+/// - Single-quoted: contents become a JSON String (commas inside allowed, `\'` → `'`).
+/// - Malformed entries (missing `=`) emit a warning to stderr and are skipped.
+fn parse_const_values_cli(s: &str) -> Vec<(String, serde_json::Value)> {
+    let mut result = Vec::new();
+    let mut remaining = s.trim();
+    while !remaining.is_empty() {
+        // Determine whether the next token is well-formed (has `=` before any `,`).
+        let comma_pos = remaining.find(',');
+        let eq_pos = remaining.find('=');
+        let is_malformed = match (eq_pos, comma_pos) {
+            (None, _) => true,                       // no `=` anywhere
+            (Some(eq), Some(cm)) if cm < eq => true, // comma before `=`
+            _ => false,
+        };
+        if is_malformed {
+            // warn instead of silently dropping the malformed entry.
+            let bad_token = remaining.split(',').next().unwrap_or(remaining).trim();
+            eprintln!(
+                "gts-cli warning: malformed const_values entry '{bad_token}': \
+                 missing '='. Expected format: field=value or field='value with spaces'. Entry skipped."
+            );
+            // Skip only this one token and continue with the rest.
+            remaining = comma_pos.map_or("", |p| {
+                remaining[p..].trim_start_matches(|c: char| c == ',' || c.is_whitespace())
+            });
+            continue;
+        }
+        let Some(eq_pos) = eq_pos else { continue };
+        let key = remaining[..eq_pos].trim().to_owned();
+        remaining = remaining[eq_pos + 1..].trim_start();
+        if key.is_empty() {
+            break;
+        }
+        let val: serde_json::Value;
+        if remaining.starts_with('\'') {
+            let chars: Vec<char> = remaining.chars().collect();
+            let mut val_str = String::new();
+            let mut i = 1usize;
+            loop {
+                match chars.get(i) {
+                    None => break,
+                    Some('\'') => {
+                        i += 1;
+                        break;
+                    }
+                    Some('\\') => {
+                        // In the raw .rs file `\'` = single backslash + `'` = escaped quote.
+                        // `\\'` = two backslashes + `'` = literal backslash, then closing quote.
+                        // Peek at the next char to decide.
+                        i += 1;
+                        match chars.get(i) {
+                            Some('\'') => {
+                                // `\'` → insert a literal `'` and consume it.
+                                val_str.push('\'');
+                                i += 1;
+                            }
+                            Some('\\') => {
+                                // `\\` → insert a literal `\` and leave the next char for the
+                                // next iteration (it may be `'` which closes the string).
+                                val_str.push('\\');
+                                i += 1;
+                            }
+                            Some(c) => {
+                                val_str.push('\\');
+                                val_str.push(*c);
+                                i += 1;
+                            }
+                            None => break,
+                        }
+                    }
+                    Some(c) => {
+                        val_str.push(*c);
+                        i += 1;
+                    }
+                }
+            }
+            let consumed: usize = chars[..i].iter().map(|c| c.len_utf8()).sum();
+            remaining = &remaining[consumed..];
+            val = serde_json::Value::String(val_str);
+        } else {
+            let comma_pos = remaining.find(',').unwrap_or(remaining.len());
+            let val_str = remaining[..comma_pos].trim();
+            val = if val_str == "true" {
+                serde_json::Value::Bool(true)
+            } else if val_str == "false" {
+                serde_json::Value::Bool(false)
+            } else if let Ok(n) = val_str.parse::<i64>() {
+                serde_json::Value::Number(n.into())
+            } else if let Ok(f) = val_str.parse::<f64>() {
+                // Fall back to a string instead of silently coercing to 0.
+                if let Some(n) = serde_json::Number::from_f64(f) {
+                    serde_json::Value::Number(n)
+                } else {
+                    serde_json::Value::String(val_str.to_owned())
+                }
+            } else {
+                serde_json::Value::String(val_str.to_owned())
+            };
+            remaining = &remaining[comma_pos..];
+        }
+        result.push((key, val));
+        remaining = remaining.trim_start_matches(|c: char| c == ',' || c.is_whitespace());
+    }
+    result
+}
+
 /// Parse the attribute body of `#[struct_to_gts_schema(...)]` to extract individual attributes
 fn parse_macro_attrs(attr_body: &str) -> Option<MacroAttrs> {
     // Patterns for extracting individual attributes
     let dir_path_re = Regex::new(r#"dir_path\s*=\s*"([^"]+)""#).ok()?;
     let schema_id_re = Regex::new(r#"schema_id\s*=\s*"([^"]+)""#).ok()?;
     let description_re = Regex::new(r#"description\s*=\s*"([^"]+)""#).ok()?;
-    let properties_re = Regex::new(r#"properties\s*=\s*"([^"]+)""#).ok()?;
+    let properties_re = Regex::new(r#"properties\s*=\s*"([^"]*)""#).ok()?;
+    let const_values_re = Regex::new(r#"const_values\s*=\s*"([^"]*)""#).ok()?;
     let base_true_re = Regex::new(r"\bbase\s*=\s*true\b").ok()?;
     let base_parent_re = Regex::new(r"\bbase\s*=\s*([A-Z]\w*)").ok()?;
 
@@ -242,6 +382,18 @@ fn parse_macro_attrs(attr_body: &str) -> Option<MacroAttrs> {
     let properties = properties_re
         .captures(attr_body)
         .and_then(|c| c.get(1).map(|m| m.as_str().to_owned()));
+    let const_values = const_values_re
+        .captures(attr_body)
+        .and_then(|c| {
+            c.get(1).map(|m| {
+                // The CLI reads raw .rs source bytes, but the proc-macro receives the
+                // Rust-lexer-decoded string (e.g. `\\'` on disk → `\'` → `'`). Unescape
+                // Rust string escapes so both code paths see the same content.
+                let unescaped = unescape_rust_str(m.as_str());
+                parse_const_values_cli(&unescaped)
+            })
+        })
+        .unwrap_or_default();
 
     // Parse base attribute
     let base = if base_true_re.is_match(attr_body) {
@@ -259,6 +411,7 @@ fn parse_macro_attrs(attr_body: &str) -> Option<MacroAttrs> {
         description,
         properties,
         base,
+        const_values,
     })
 }
 
@@ -270,21 +423,38 @@ fn extract_and_generate_schemas(
     source_root: &Path,
     source_file: &Path,
 ) -> Result<Vec<(String, String)>> {
-    // Match #[struct_to_gts_schema(...)] followed by struct definition
+    // Match #[struct_to_gts_schema(...)] followed by struct definition.
+    // Also skips `///` / `//!` doc-comment lines and blank lines between the attribute and struct.
+    // The attribute body capture uses `(?:"[^"]*"|[^)"]+)+` so that `)` inside a
+    // double-quoted string value does not terminate the capture prematurely.
     // Captures: (1) attribute body, (2) struct name, (3) optional generics, (4) struct body or semicolon for unit structs
     let re = Regex::new(
-        r"(?s)#\[struct_to_gts_schema\(([^)]+)\)\]\s*(?:#\[[^\]]+\]\s*)*(?:pub\s+)?struct\s+(\w+)(?:<([^>]+)>)?\s*(?:\{([^}]*)\}|;)",
+        r#"(?s)#\[struct_to_gts_schema\(((?:"[^"]*"|[^)"]+)+)\)\]\s*(?:(?:#\[[^\]]+\]|///[^\n]*|//![^\n]*)\s*)*(?:pub\s+)?struct\s+(\w+)(?:<([^>]+)>)?\s*(?:\{([^}]*)\}|;)"#,
     )?;
 
     // Pre-compile field regex outside the loop
-    let field_re = Regex::new(r"(?m)^\s*(?:pub\s+)?(\w+)\s*:\s*([^,\n]+)")?;
+    let field_re = Regex::new(r"(?m)^\s*(?:pub\s+)?(r#)?(\w+)\s*:\s*([^,\n]+)")?;
+
+    // Pass 1: build a map of struct_name -> name of the GtsSchemaId field (for auto const injection)
+    let mut gts_schema_id_field: HashMap<String, String> = HashMap::new();
+    for cap in re.captures_iter(content) {
+        let struct_name = cap[2].to_owned();
+        let struct_body = cap.get(4).map_or("", |m| m.as_str());
+        for field_cap in field_re.captures_iter(struct_body) {
+            let field_name = &field_cap[2];
+            let field_type = field_cap[3].trim().trim_end_matches(',');
+            if field_type == "GtsSchemaId" {
+                gts_schema_id_field.insert(struct_name.clone(), field_name.to_owned());
+            }
+        }
+    }
 
     let mut results = Vec::new();
 
+    // Pass 2: generate schemas
     for cap in re.captures_iter(content) {
         let attr_body = &cap[1];
         let struct_name = &cap[2];
-        let _generics = cap.get(3).map(|m| m.as_str());
         let struct_body = cap.get(4).map_or("", |m| m.as_str());
 
         // Parse macro attributes
@@ -292,16 +462,21 @@ fn extract_and_generate_schemas(
             continue;
         };
 
+        // Determine parent's GtsSchemaId field name for auto const injection
+        let parent_schema_id_field: Option<&str> = match &attrs.base {
+            BaseAttr::Parent(parent_name) => {
+                gts_schema_id_field.get(parent_name).map(String::as_str)
+            }
+            BaseAttr::IsBase => None,
+        };
+
         // Convert schema_id to filename-safe format
-        // e.g., "gts.x.core.events.type.v1~" -> "gts.x.core.events.type.v1~"
         let schema_file_rel = format!("{}/{}.schema.json", attrs.dir_path, attrs.schema_id);
 
         // Determine output path
         let output_path = if let Some(output_dir) = output_override {
-            // Use CLI-provided output directory
             Path::new(output_dir).join(&schema_file_rel)
         } else {
-            // Use path from macro (relative to source file's directory)
             let source_dir = source_file.parent().unwrap_or(source_root);
             source_dir.join(&schema_file_rel)
         };
@@ -310,7 +485,6 @@ fn extract_and_generate_schemas(
         let output_canonical = if output_path.exists() {
             output_path.canonicalize()?
         } else {
-            // For non-existent files, canonicalize the parent directory
             let parent = output_path.parent().unwrap_or(Path::new("."));
             fs::create_dir_all(parent)?;
             let parent_canonical = parent.canonicalize()?;
@@ -320,7 +494,6 @@ fn extract_and_generate_schemas(
             parent_canonical.join(file_name)
         };
 
-        // Check if output path is within source repository
         if !output_canonical.starts_with(source_root) {
             bail!(
                 "Security error in {}:{} - dir_path '{}' attempts to write outside source repository. \
@@ -335,10 +508,9 @@ fn extract_and_generate_schemas(
 
         // Parse struct fields
         let mut field_types = HashMap::new();
-
         for field_cap in field_re.captures_iter(struct_body) {
-            let field_name = &field_cap[1];
-            let field_type = field_cap[2].trim().trim_end_matches(',');
+            let field_name = &field_cap[2];
+            let field_type = field_cap[3].trim().trim_end_matches(',');
             field_types.insert(field_name.to_owned(), field_type.to_owned());
         }
 
@@ -350,17 +522,15 @@ fn extract_and_generate_schemas(
             attrs.properties.as_deref(),
             &attrs.base,
             &field_types,
+            &attrs.const_values,
+            parent_schema_id_field,
         );
 
-        // Create parent directories
         if let Some(parent) = output_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        // Write schema file
         fs::write(&output_path, serde_json::to_string_pretty(&schema)?)?;
-
-        // Add to results (schema_id, file_path)
         results.push((attrs.schema_id, output_path.display().to_string()));
     }
 
@@ -368,6 +538,7 @@ fn extract_and_generate_schemas(
 }
 
 /// Build a JSON Schema object from parsed metadata
+#[allow(clippy::too_many_arguments)]
 fn build_json_schema(
     schema_id: &str,
     struct_name: &str,
@@ -375,6 +546,8 @@ fn build_json_schema(
     properties_list: Option<&str>,
     base: &BaseAttr,
     field_types: &HashMap<String, String>,
+    const_values: &[(String, serde_json::Value)],
+    parent_schema_id_field: Option<&str>,
 ) -> serde_json::Value {
     use serde_json::json;
 
@@ -430,8 +603,17 @@ fn build_json_schema(
         }
         BaseAttr::Parent(parent_name) => {
             // Child type - use allOf with $ref to parent
-            // The parent's schema_id is derived from this schema's ID by removing the last segment
             let parent_schema_id = derive_parent_schema_id(schema_id);
+
+            // Auto-inject const for the parent's GtsSchemaId field (e.g. "type")
+            if let Some(sid_field) = parent_schema_id_field {
+                schema_properties.insert(sid_field.to_owned(), json!({ "const": schema_id }));
+            }
+
+            // Inject each const_value as {"const": <value>} in properties
+            for (field, val) in const_values {
+                schema_properties.insert(field.clone(), json!({ "const": val }));
+            }
 
             let mut own_properties = json!({
                 "properties": schema_properties
@@ -715,6 +897,8 @@ mod tests {
             None, // Include all properties
             &BaseAttr::IsBase,
             &field_types,
+            &[],
+            None,
         );
 
         assert_eq!(schema["$id"], "gts://gts.x.test.base.v1~");
@@ -750,6 +934,8 @@ mod tests {
             None,
             &BaseAttr::Parent("BaseStruct".to_owned()),
             &field_types,
+            &[],
+            None,
         );
 
         assert_eq!(schema["$id"], "gts://gts.x.test.base.v1~x.test.child.v1~");
@@ -1066,5 +1252,327 @@ pub struct ChildEvent {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("does not exist"));
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_const_values_cli – unit tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_const_values_cli_bool_true() {
+        let result = parse_const_values_cli("active=true");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "active");
+        assert_eq!(result[0].1, serde_json::Value::Bool(true));
+    }
+
+    #[test]
+    fn test_parse_const_values_cli_bool_false() {
+        let result = parse_const_values_cli("enabled=false");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1, serde_json::Value::Bool(false));
+    }
+
+    #[test]
+    fn test_parse_const_values_cli_integer() {
+        let result = parse_const_values_cli("http_status=400");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1, serde_json::Value::Number(400.into()));
+    }
+
+    #[test]
+    fn test_parse_const_values_cli_negative_integer() {
+        let result = parse_const_values_cli("offset=-1");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1, serde_json::Value::Number((-1_i64).into()));
+    }
+
+    #[test]
+    fn test_parse_const_values_cli_float() {
+        let result = parse_const_values_cli("threshold=0.95");
+        assert_eq!(result.len(), 1);
+        let n = serde_json::Number::from_f64(0.95_f64).unwrap();
+        assert_eq!(result[0].1, serde_json::Value::Number(n));
+    }
+
+    #[test]
+    fn test_parse_const_values_cli_unquoted_string() {
+        let result = parse_const_values_cli("code=ERR_NOT_FOUND");
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].1,
+            serde_json::Value::String("ERR_NOT_FOUND".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_parse_const_values_cli_single_quoted_string_with_comma() {
+        // Comma inside the quoted value must NOT split the entry.
+        let result =
+            parse_const_values_cli("message='Invalid input: field required, value missing'");
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].1,
+            serde_json::Value::String("Invalid input: field required, value missing".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_parse_const_values_cli_escaped_single_quote() {
+        let result = parse_const_values_cli("message='can\\'t stop'");
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].1,
+            serde_json::Value::String("can't stop".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_parse_const_values_cli_multiple_entries() {
+        let result = parse_const_values_cli("http_status=400,message='bad request',retry=false");
+        assert_eq!(result.len(), 3);
+        assert_eq!(
+            result[0],
+            (
+                "http_status".to_owned(),
+                serde_json::Value::Number(400.into())
+            )
+        );
+        assert_eq!(
+            result[1],
+            (
+                "message".to_owned(),
+                serde_json::Value::String("bad request".to_owned())
+            )
+        );
+        assert_eq!(
+            result[2],
+            ("retry".to_owned(), serde_json::Value::Bool(false))
+        );
+    }
+
+    #[test]
+    fn test_parse_const_values_cli_empty_string() {
+        // Empty input produces no entries and must not panic.
+        let result = parse_const_values_cli("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_const_values_cli_whitespace_only() {
+        let result = parse_const_values_cli("   ");
+        assert!(result.is_empty());
+    }
+
+    /// Bug fix regression: a malformed entry (missing `=`) must be skipped,
+    /// not silently dropped along with all subsequent entries.
+    #[test]
+    fn test_parse_const_values_cli_malformed_entry_skipped() {
+        // "bar" has no `=` – it should be warned about and skipped.
+        // The valid entry that follows must still be parsed.
+        let result = parse_const_values_cli("foo=1,bar,baz=2");
+        // "foo" and "baz" are valid; "bar" is malformed and skipped.
+        assert_eq!(result.len(), 2, "expected foo and baz, got {result:?}");
+        assert!(result.iter().any(|(k, _)| k == "foo"));
+        assert!(result.iter().any(|(k, _)| k == "baz"));
+    }
+
+    /// Bug fix regression: a leading malformed entry must not truncate the rest.
+    #[test]
+    fn test_parse_const_values_cli_leading_malformed_entry_skipped() {
+        let result = parse_const_values_cli("bad_entry,good=42");
+        assert_eq!(result.len(), 1, "expected only good, got {result:?}");
+        assert_eq!(result[0].0, "good");
+        assert_eq!(result[0].1, serde_json::Value::Number(42.into()));
+    }
+
+    /// Bug fix regression: `NaN` must NOT be silently coerced to 0.
+    /// It is not a valid JSON number so it must fall back to a String.
+    #[test]
+    fn test_parse_const_values_cli_nan_falls_back_to_string() {
+        let result = parse_const_values_cli("score=NaN");
+        assert_eq!(result.len(), 1);
+        // `NaN` parses as f64 but from_f64 returns None → fallback to String.
+        assert_eq!(
+            result[0].1,
+            serde_json::Value::String("NaN".to_owned()),
+            "NaN must not be coerced to 0"
+        );
+    }
+
+    /// Bug fix regression: `inf` must NOT be silently coerced to 0.
+    #[test]
+    fn test_parse_const_values_cli_inf_falls_back_to_string() {
+        let result = parse_const_values_cli("limit=inf");
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].1,
+            serde_json::Value::String("inf".to_owned()),
+            "inf must not be coerced to 0"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // build_json_schema – 3-level hierarchy with const_values (#5)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_build_json_schema_three_level_hierarchy() {
+        use serde_json::json;
+
+        // L1 – base
+        let mut l1_fields = HashMap::new();
+        l1_fields.insert("type".to_owned(), "GtsSchemaId".to_owned());
+        l1_fields.insert("severity".to_owned(), "i32".to_owned());
+        l1_fields.insert("source".to_owned(), "String".to_owned());
+        l1_fields.insert("payload".to_owned(), "P".to_owned());
+
+        let l1 = build_json_schema(
+            "gts.x.test.three.v1~",
+            "ThreeBaseV1",
+            Some("L1 base"),
+            Some("type,severity,source,payload"),
+            &BaseAttr::IsBase,
+            &l1_fields,
+            &[],
+            None,
+        );
+        assert_eq!(l1["$id"], "gts://gts.x.test.three.v1~");
+        assert!(l1["properties"]["type"].is_object());
+        assert!(l1["properties"]["payload"].is_object());
+        assert!(l1["allOf"].is_null(), "base must NOT have allOf");
+
+        // L2 – child of L1, with const_values
+        let mut l2_fields = HashMap::new();
+        l2_fields.insert("channel".to_owned(), "String".to_owned());
+        l2_fields.insert("data".to_owned(), "D".to_owned());
+
+        let l2 = build_json_schema(
+            "gts.x.test.three.v1~x.test.three.alert.v1~",
+            "ThreeAlertV1",
+            Some("L2 alert"),
+            Some("channel,data"),
+            &BaseAttr::Parent("ThreeBaseV1".to_owned()),
+            &l2_fields,
+            &[
+                ("severity".to_owned(), json!(3)),
+                ("source".to_owned(), json!("alert-svc")),
+            ],
+            Some("type"), // parent's GtsSchemaId field
+        );
+        assert_eq!(
+            l2["$id"],
+            "gts://gts.x.test.three.v1~x.test.three.alert.v1~"
+        );
+        let l2_allof = l2["allOf"].as_array().expect("L2 must have allOf");
+        assert_eq!(l2_allof[0]["$ref"], "gts://gts.x.test.three.v1~");
+        let l2_props = l2_allof[1]["properties"]
+            .as_object()
+            .expect("L2 allOf[1].properties");
+        // auto-injected type const from parent's GtsSchemaId field
+        assert_eq!(
+            l2_props["type"]["const"], "gts.x.test.three.v1~x.test.three.alert.v1~",
+            "type const must be auto-injected from parent's GtsSchemaId field"
+        );
+        // const_values
+        assert_eq!(l2_props["severity"]["const"], 3);
+        assert_eq!(l2_props["source"]["const"], "alert-svc");
+        // own structural properties
+        assert!(l2_props["channel"].is_object());
+        assert!(l2_props["data"].is_object());
+
+        // L3 – child of L2, with const_values; L2 has no GtsSchemaId field
+        let mut l3_fields = HashMap::new();
+        l3_fields.insert("to".to_owned(), "String".to_owned());
+        l3_fields.insert("subject".to_owned(), "String".to_owned());
+
+        let l3 = build_json_schema(
+            "gts.x.test.three.v1~x.test.three.alert.v1~x.test.three.email.v1~",
+            "ThreeEmailV1",
+            Some("L3 email"),
+            Some("to,subject"),
+            &BaseAttr::Parent("ThreeAlertV1".to_owned()),
+            &l3_fields,
+            &[("channel".to_owned(), json!("email"))],
+            None, // L2 has no GtsSchemaId field
+        );
+        assert_eq!(
+            l3["$id"],
+            "gts://gts.x.test.three.v1~x.test.three.alert.v1~x.test.three.email.v1~"
+        );
+        let l3_allof = l3["allOf"].as_array().expect("L3 must have allOf");
+        // L3 must $ref L2, not L1
+        assert_eq!(
+            l3_allof[0]["$ref"], "gts://gts.x.test.three.v1~x.test.three.alert.v1~",
+            "L3 must reference L2 via derive_parent_schema_id"
+        );
+        let l3_props = l3_allof[1]["properties"]
+            .as_object()
+            .expect("L3 allOf[1].properties");
+        // const_values
+        assert_eq!(
+            l3_props["channel"]["const"], "email",
+            "channel const must be present in L3"
+        );
+        // L3 must NOT have auto-injected type const (L2 has no GtsSchemaId field)
+        assert!(
+            !l3_props.contains_key("type"),
+            "L3 must not auto-inject type (L2 has no GtsSchemaId field)"
+        );
+        // own structural properties
+        assert!(l3_props["to"].is_object(), "L3 must have 'to' property");
+        assert!(
+            l3_props["subject"].is_object(),
+            "L3 must have 'subject' property"
+        );
+        // required
+        let l3_required = l3_allof[1]["required"]
+            .as_array()
+            .expect("L3 must have required");
+        assert!(
+            l3_required.contains(&json!("to")),
+            "L3 required must include 'to'"
+        );
+        assert!(
+            l3_required.contains(&json!("subject")),
+            "L3 required must include 'subject'"
+        );
+    }
+
+    #[test]
+    fn test_derive_parent_schema_id_three_segments() {
+        // 3-segment ID: derive_parent_schema_id must return the 2-segment parent
+        assert_eq!(
+            derive_parent_schema_id(
+                "gts.x.test.three.v1~x.test.three.alert.v1~x.test.three.email.v1~"
+            ),
+            "gts.x.test.three.v1~x.test.three.alert.v1~"
+        );
+    }
+
+    /// `parse_const_values_cli` is called from `parse_macro_attrs`; verify the
+    /// round-trip when `const_values` appears in a realistic attribute body.
+    #[test]
+    fn test_parse_macro_attrs_const_values_round_trip() {
+        let attr_body = r#"
+            dir_path = "schemas",
+            base = true,
+            schema_id = "gts.x.test.v1~",
+            description = "Test",
+            properties = "status",
+            const_values = "http_status=400,message='bad request'"
+        "#;
+        let attrs = parse_macro_attrs(attr_body).unwrap();
+        assert_eq!(attrs.const_values.len(), 2);
+        assert_eq!(attrs.const_values[0].0, "http_status");
+        assert_eq!(
+            attrs.const_values[0].1,
+            serde_json::Value::Number(400.into())
+        );
+        assert_eq!(attrs.const_values[1].0, "message");
+        assert_eq!(
+            attrs.const_values[1].1,
+            serde_json::Value::String("bad request".to_owned())
+        );
     }
 }

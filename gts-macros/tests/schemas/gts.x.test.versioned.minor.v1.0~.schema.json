@@ -1,15 +1,9 @@
 {
-  "$id": "gts://gts.x.core.events.topic.v1~",
+  "$id": "gts://gts.x.test.versioned.minor.v1.0~",
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
-  "description": "Event Topic (Stream) definition",
+  "description": "Test struct with minor version",
   "properties": {
-    "description": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
     "id": {
       "description": "GTS instance identifier",
       "format": "gts-instance-id",
@@ -17,22 +11,14 @@
       "type": "string",
       "x-gts-ref": "gts.*"
     },
-    "name": {
-      "type": "string"
-    },
-    "ordering": {
-      "type": "string"
-    },
-    "retention": {
+    "value": {
       "type": "string"
     }
   },
   "required": [
     "id",
-    "name",
-    "ordering",
-    "retention"
+    "value"
   ],
-  "title": "EventTopicV1",
+  "title": "MinorVersionV1_0",
   "type": "object"
 }

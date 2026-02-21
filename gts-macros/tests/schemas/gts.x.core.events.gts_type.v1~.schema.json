@@ -1,0 +1,38 @@
+{
+  "$id": "gts://gts.x.core.events.gts_type.v1~",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "Base event type with serde(rename = \\",
+  "properties": {
+    "event_type": {
+      "description": "GTS schema identifier",
+      "format": "gts-schema-id",
+      "title": "GTS Schema ID",
+      "type": "string",
+      "x-gts-ref": "gts.*"
+    },
+    "id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "payload": {
+      "type": "object"
+    },
+    "sequence_id": {
+      "type": "integer"
+    },
+    "tenant_id": {
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "required": [
+    "event_type",
+    "id",
+    "payload",
+    "sequence_id",
+    "tenant_id"
+  ],
+  "title": "BaseEventV1GtsTypeRenameV1",
+  "type": "object"
+}

@@ -1,6 +1,7 @@
 //! Test: base = ParentStruct where parent's GTS_SCHEMA_ID doesn't match
 //! the parent segment in schema_id should fail at compile time
 
+use gts::GtsSchemaId;
 use gts_macros::struct_to_gts_schema;
 
 // Define a base type with one schema ID (must be generic)
@@ -9,11 +10,11 @@ use gts_macros::struct_to_gts_schema;
     base = true,
     schema_id = "gts.x.core.events.type.v1~",
     description = "Base event type",
-    properties = "id,payload"
+    properties = "type,payload"
 )]
 #[derive(Debug)]
 pub struct BaseEventV1<P> {
-    pub id: String,
+    pub r#type: GtsSchemaId,
     pub payload: P,
 }
 

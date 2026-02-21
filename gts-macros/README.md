@@ -10,6 +10,39 @@ The `#[struct_to_gts_schema]` attribute macro serves **three purposes**:
 2. **Schema Generation** - Enables CLI-based JSON Schema file generation
 3. **Runtime API** - Provides schema access, instance ID generation, and schema composition capabilities at runtime
 
+### Generated API at a Glance
+
+The macro generates the following on every annotated struct:
+
+| Generated Item | Kind | Description |
+|---|---|---|
+| `GTS_SCHEMA_FILE_PATH` | `const &str` | Output file path for CLI schema generation |
+| `GTS_SCHEMA_DESCRIPTION` | `const &str` | Schema description |
+| `GTS_SCHEMA_PROPERTIES` | `const &str` | Comma-separated property list |
+| `GTS_SCHEMA_ID_FIELD_NAME` | `const Option<&str>` | Name of the `GtsSchemaId` field, if any |
+| `GTS_INSTANCE_ID_FIELD_NAME` | `const Option<&str>` | Name of the `GtsInstanceId` field, if any |
+| `gts_schema_id()` | `fn -> &'static GtsSchemaId` | This struct's schema ID |
+| `gts_base_schema_id()` | `fn -> Option<&'static GtsSchemaId>` | Parent schema ID (`None` for base structs) |
+| `gts_make_instance_id(segment)` | `fn -> GtsInstanceId` | Append a segment to the schema ID |
+| `gts_schema_with_refs()` | `fn -> serde_json::Value` | JSON Schema with `$ref` inheritance |
+| `gts_schema_with_refs_as_string()` | `fn -> String` | Compact JSON string of the schema |
+| `gts_schema_with_refs_as_string_pretty()` | `fn -> String` | Pretty-printed JSON string of the schema |
+| `impl GtsSchema` | trait impl | `SCHEMA_ID`, `GENERIC_FIELD`, `gts_schema_with_refs()` |
+
+**Base structs only** (structs with `base = true` and named fields):
+
+| Generated Item | Kind | Description |
+|---|---|---|
+| `new_instance_with_defaults()` | `fn -> Self` | Create instance with all fields defaulted; `GtsSchemaId` fields set to `M::SCHEMA_ID` |
+| `new_instance_with_defaults(segment)` | `fn(&str) -> Self` | *(only if struct has exactly one `GtsInstanceId` field)* Same as above, plus builds the instance ID from `M::SCHEMA_ID` + segment |
+| `gts_instance_json(&self)` | `fn -> serde_json::Value` | Serialize this instance to JSON |
+| `gts_instance_json_as_string(&self)` | `fn -> String` | Serialize to compact JSON string |
+| `gts_instance_json_as_string_pretty(&self)` | `fn -> String` | Serialize to pretty JSON string |
+
+**Derived structs** (`base = ParentStruct`): The `GtsSchemaId` field's `const` value is **automatically injected** into the schema -- no need to include it in `const_values`.
+
+> **Compile error**: A struct with 2+ `GtsInstanceId` fields is rejected at compile time.
+
 ## Installation
 
 Add to your `Cargo.toml`:
@@ -84,10 +117,10 @@ The macro validates your annotations at compile time, catching errors early.
 
 The macro automatically adds these derives to your struct:
 - **Base structs** (`base = true`): `serde::Serialize`, `serde::Deserialize`, `schemars::JsonSchema`
-- **Nested structs** (`base = ParentStruct`): `schemars::JsonSchema` only  
+- **Nested structs** (`base = ParentStruct`): `schemars::JsonSchema` only
   (direct Serialize/Deserialize is intentionally blocked)
 
-**Do NOT add Serialize/Deserialize manually for nested structs** - direct serialization is prohibited.  
+**Do NOT add Serialize/Deserialize manually for nested structs** - direct serialization is prohibited.
 You can add other derives like `Debug`, `Clone`, etc.
 
 ```rust
@@ -704,6 +737,8 @@ let schema = BaseEventV1::<AuditPayloadV1<PlaceOrderDataV1>>::gts_schema_with_re
 | `gts_schema_with_refs()` | `serde_json::Value` | Get schema as JSON value with `$ref` |
 | `gts_schema_with_refs_as_string()` | `String` | Get schema as compact JSON string |
 | `gts_schema_with_refs_as_string_pretty()` | `String` | Get schema as pretty-printed JSON string |
+| `new_instance_with_defaults()` | `Self` | Create instance with defaults; `GtsSchemaId` set to `M::SCHEMA_ID` (base structs only) |
+| `new_instance_with_defaults(segment)` | `Self` | Same + builds `GtsInstanceId` from `M::SCHEMA_ID` + segment (base structs with 1 `GtsInstanceId` field) |
 | `gts_instance_json(&self)` | `serde_json::Value` | Serialize instance to JSON value |
 | `gts_instance_json_as_string(&self)` | `String` | Serialize instance to compact JSON string |
 | `gts_instance_json_as_string_pretty(&self)` | `String` | Serialize instance to pretty-printed JSON string |
@@ -713,15 +748,16 @@ let schema = BaseEventV1::<AuditPayloadV1<PlaceOrderDataV1>>::gts_schema_with_re
 
 ## Macro Parameters
 
-All parameters are **required** (5 total):
+5 required + 1 optional:
 
-| Parameter | Description | Example |
-|-----------|-------------|---------|
-| `dir_path` | Output directory for generated schema | `"schemas"` |
-| `base` | Inheritance declaration (see below) | `true` or `ParentStruct` |
-| `schema_id` | GTS identifier | `"gts.x.app.entities.user.v1~"` |
-| `description` | Human-readable description | `"User entity"` |
-| `properties` | Comma-separated field list | `"id,email,name"` |
+| Parameter | Required | Description | Example |
+|-----------|----------|-------------|---------|
+| `dir_path` | Yes | Output directory for generated schema | `"schemas"` |
+| `base` | Yes | Inheritance declaration (see below) | `true` or `ParentStruct` |
+| `schema_id` | Yes | GTS identifier | `"gts.x.app.entities.user.v1~"` |
+| `description` | Yes | Human-readable description | `"User entity"` |
+| `properties` | Yes | Comma-separated field list | `"id,email,name"` |
+| `const_values` | No | Field=value pairs injected as JSON `const` | `"http_status=400,message='bad request'"` |
 
 ### The `base` Attribute
 
@@ -745,6 +781,75 @@ gts.<vendor>.<package>.<namespace>.<type>.v<MAJOR>[.<MINOR>]~
 Examples:
 - `gts.x.core.iam.user.v1~` - IAM user schema
 - `gts.x.commerce.orders.order.v1.0~` - Order schema with minor version
+
+### The `const_values` Parameter
+
+`const_values` constrains specific fields to fixed JSON `const` values in the derived schema. Use it to model typed sub-schemas (e.g. error classes) where most fields are predetermined.
+
+**Syntax**: comma-separated `field=value` pairs.
+
+| Value form | JSON type | Example |
+|---|---|---|
+| `true` / `false` | `boolean` | `active=true` |
+| Integer | `integer` | `http_status=400` |
+| Float | `number` | `threshold=0.95` |
+| Single-quoted string | `string` | `message='bad request'` |
+| Unquoted string | `string` | `code=ERR_BAD_REQUEST` |
+
+**Empty metadata** — unit struct, metadata serializes as `{}`:
+
+```rust
+#[struct_to_gts_schema(
+    dir_path = "schemas",
+    base = BaseErrorV1,
+    schema_id = "gts.x.core.err.error.v1~x.core.http.bad_request.v1~",
+    description = "HTTP 400 Bad Request",
+    properties = "",
+    const_values = "http_status=400,message='bad request'"
+)]
+pub struct BadRequestMetadataV1;  // unit struct = empty metadata {}
+```
+
+**Structured metadata** — non-unit struct, metadata carries typed fields:
+
+```rust
+#[struct_to_gts_schema(
+    dir_path = "schemas",
+    base = BaseErrorV1,
+    schema_id = "gts.x.core.err.error.v1~x.core.http.validation.v1~",
+    description = "HTTP 422 Unprocessable Entity with validation details",
+    properties = "field,reason",
+    const_values = "http_status=422,message='Validation failed'"
+)]
+#[derive(Debug, Default)]
+pub struct ValidationErrorMetadataV1 {
+    pub field: String,   // name of the field that failed validation
+    pub reason: String,  // human-readable explanation
+}
+```
+
+Creating an instance with structured metadata:
+
+```rust
+let mut err = BaseErrorV1::<ValidationErrorMetadataV1>::new_instance_with_defaults();
+err.trace_id = "trace-abc-123".to_owned();
+err.metadata.field = "email".to_owned();
+err.metadata.reason = "must be a valid email address".to_owned();
+```
+
+The macro injects each pair as `{ "const": <value> }` into the `allOf` constraint object. The `GtsSchemaId` field (e.g. `type`) is **automatically injected** as a const for derived structs — no need to include it in `const_values`.
+
+`const_values` also integrates with `new_instance_with_defaults()`: the generated constructor applies all const overrides automatically, so callers only supply the truly variable fields:
+
+```rust
+impl BadRequestMetadataV1 {
+    pub fn new(trace_id: impl Into<String>) -> BaseErrorV1<Self> {
+        let mut instance = Self::new_instance_with_defaults(); // applies http_status=400, message='bad request'
+        instance.trace_id = trace_id.into();
+        instance
+    }
+}
+```
 
 ---
 

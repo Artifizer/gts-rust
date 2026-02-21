@@ -1,0 +1,5 @@
+error: struct_to_gts_schema: Malformed const_values entry 'value_without_equals': missing '='. Expected format: field=value or field='value with spaces'
+  --> tests/compile_fail/const_values_malformed.rs:11:20
+   |
+11 |     const_values = "value_without_equals"
+   |                    ^^^^^^^^^^^^^^^^^^^^^^

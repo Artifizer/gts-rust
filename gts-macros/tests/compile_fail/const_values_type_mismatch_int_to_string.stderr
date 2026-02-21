@@ -1,0 +1,20 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/const_values_type_mismatch_int_to_string.rs:20:1
+   |
+20 | / #[struct_to_gts_schema(
+21 | |     dir_path = "schemas",
+22 | |     base = MismatchBaseV1,
+23 | |     schema_id = "gts.x.test.mismatch.base.v1~x.test.mismatch.int_to_string.v1~",
+...  |
+26 | |     const_values = "label=400"
+27 | | )]
+   | |  ^
+   | |  |
+   | |__expected `String`, found integer
+   |    expected due to the type of this binding
+   |
+   = note: this error originates in the attribute macro `struct_to_gts_schema` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: try using a conversion method
+   |
+27 | )].to_string()
+   |   ++++++++++++

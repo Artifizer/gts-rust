@@ -1,0 +1,25 @@
+{
+  "$id": "gts://gts.x.core.err.error.v1~x.core.http.conflict.v1~",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "allOf": [
+    {
+      "$ref": "gts://gts.x.core.err.error.v1~"
+    },
+    {
+      "properties": {
+        "http_status": {
+          "const": 409
+        },
+        "message": {
+          "const": "Resource can't be created: already exists"
+        },
+        "type": {
+          "const": "gts.x.core.err.error.v1~x.core.http.conflict.v1~"
+        }
+      }
+    }
+  ],
+  "description": "HTTP 409 Conflict",
+  "title": "ConflictMetadataV1 (extends BaseErrorV1)",
+  "type": "object"
+}

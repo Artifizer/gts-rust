@@ -1,0 +1,39 @@
+{
+  "$id": "gts://gts.x.test.three.event.v1~x.test.three.alert.v1~",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "allOf": [
+    {
+      "$ref": "gts://gts.x.test.three.event.v1~"
+    },
+    {
+      "properties": {
+        "channel": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object"
+        },
+        "recipient": {
+          "type": "string"
+        },
+        "severity": {
+          "const": 3
+        },
+        "source": {
+          "const": "alert-service"
+        },
+        "type": {
+          "const": "gts.x.test.three.event.v1~x.test.three.alert.v1~"
+        }
+      },
+      "required": [
+        "channel",
+        "data",
+        "recipient"
+      ]
+    }
+  ],
+  "description": "Alert event payload (severity=3, source=alert-service)",
+  "title": "ThreeAlertPayloadV1 (extends ThreeEventBaseV1)",
+  "type": "object"
+}

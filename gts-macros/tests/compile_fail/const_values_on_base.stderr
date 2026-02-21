@@ -1,0 +1,13 @@
+error: struct_to_gts_schema: `const_values` is not allowed on base structs (`base = true`). const_values only applies to derived structs that extend a parent via `base = ParentStruct`.
+  --> tests/compile_fail/const_values_on_base.rs:15:12
+   |
+15 | pub struct BaseWithConstV1 {
+   |            ^^^^^^^^^^^^^^^
+
+warning: unused import: `gts::GtsSchemaId`
+ --> tests/compile_fail/const_values_on_base.rs:4:5
+  |
+4 | use gts::GtsSchemaId;
+  |     ^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
