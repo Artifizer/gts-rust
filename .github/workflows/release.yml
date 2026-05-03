@@ -202,7 +202,6 @@ jobs:
 
       # Free disk space before cross-compilation: cross pulls a large Docker image
       # and the ARM Linux build can exhaust the ~14 GB available on ubuntu-latest.
-      # Sourced from hyperspot's release workflow; only applied to cross-compiled targets.
       - name: Free disk space (cross targets only)
         if: matrix.cross == true
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
