@@ -248,7 +248,12 @@ impl GtsEntity {
             if let Some(schema_val) = obj.get("$schema")
                 && let Some(schema_str) = schema_val.as_str()
             {
-                self.schema_id = Some(schema_str.to_owned());
+                // Per spec: type_id MUST be a GTS Type Identifier or null and no
+                // longer falls back to a JSON Schema dialect URL. Only retain
+                // $schema values that look like a GTS Type Identifier.
+                if schema_str.starts_with("gts.") {
+                    self.schema_id = Some(schema_str.to_owned());
+                }
                 self.selected_schema_id_field = Some("$schema".to_owned());
             }
 
@@ -276,12 +281,14 @@ impl GtsEntity {
                     } else {
                         format!("{parent_id}~")
                     };
-                    // Use parent as schema_id if $schema is a standard JSON Schema URL
-                    if self
+                    // Use parent from chain as type_id when current value isn't
+                    // already a GTS Type Identifier (e.g. $schema held a JSON
+                    // Schema dialect URL, or no $schema was present).
+                    let already_gts_type_id = self
                         .schema_id
                         .as_ref()
-                        .is_some_and(|s| s.starts_with("http"))
-                    {
+                        .is_some_and(|s| s.starts_with("gts."));
+                    if !already_gts_type_id {
                         self.schema_id = Some(parent_id);
                     }
                 }

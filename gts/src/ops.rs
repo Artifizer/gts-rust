@@ -21,7 +21,7 @@ pub struct GtsIdValidationResult {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub error: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_schema: Option<bool>,
+    pub is_type: Option<bool>,
     pub is_wildcard: bool,
 }
 
@@ -61,7 +61,7 @@ pub struct GtsIdParseResult {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub error: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_schema: Option<bool>,
+    pub is_type: Option<bool>,
     pub is_wildcard: bool,
 }
 
@@ -108,8 +108,8 @@ pub struct GtsSchemaGraphResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GtsEntityInfo {
     pub id: String,
-    pub schema_id: Option<String>,
-    pub is_schema: bool,
+    pub type_id: Option<String>,
+    pub is_type_schema: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,8 +117,8 @@ pub struct GtsGetEntityResult {
     pub ok: bool,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub id: String,
-    pub schema_id: Option<String>,
-    pub is_schema: bool,
+    pub type_id: Option<String>,
+    pub is_type_schema: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<Value>,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -137,8 +137,8 @@ pub struct GtsAddEntityResult {
     pub ok: bool,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub id: String,
-    pub schema_id: Option<String>,
-    pub is_schema: bool,
+    pub type_id: Option<String>,
+    pub is_type_schema: bool,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub error: String,
 }
@@ -161,10 +161,10 @@ pub struct GtsAddSchemaResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GtsExtractIdResult {
     pub id: String,
-    pub schema_id: Option<String>,
+    pub type_id: Option<String>,
     pub selected_entity_field: Option<String>,
-    pub selected_schema_id_field: Option<String>,
-    pub is_schema: bool,
+    pub selected_type_id_field: Option<String>,
+    pub is_type_schema: bool,
 }
 
 pub struct GtsOps {
@@ -290,8 +290,8 @@ impl GtsOps {
             return GtsAddEntityResult {
                 ok: false,
                 id: String::new(),
-                schema_id: None,
-                is_schema: false,
+                type_id: None,
+                is_type_schema: false,
                 error: if entity.is_schema {
                     format!(
                         "Unable to detect GTS ID in schema entity:\n{}",
@@ -311,8 +311,8 @@ impl GtsOps {
             return GtsAddEntityResult {
                 ok: false,
                 id: String::new(),
-                schema_id: None,
-                is_schema: false,
+                type_id: None,
+                is_type_schema: false,
                 error: format!(
                     "Unable to register entity: {e}\n{}",
                     self.get_details(&entity)
@@ -328,8 +328,8 @@ impl GtsOps {
             return GtsAddEntityResult {
                 ok: false,
                 id: String::new(),
-                schema_id: None,
-                is_schema: true,
+                type_id: None,
+                is_type_schema: true,
                 error: e,
             };
         }
@@ -341,8 +341,8 @@ impl GtsOps {
             return GtsAddEntityResult {
                 ok: false,
                 id: String::new(),
-                schema_id: None,
-                is_schema: false,
+                type_id: None,
+                is_type_schema: false,
                 error: format!(
                     "Schema validation failed: {e}\n{}",
                     self.get_details(&entity)
@@ -357,8 +357,8 @@ impl GtsOps {
                 return GtsAddEntityResult {
                     ok: false,
                     id: String::new(),
-                    schema_id: None,
-                    is_schema: true,
+                    type_id: None,
+                    is_type_schema: true,
                     error: format!(
                         "Schema chain validation failed: {e}\n{}",
                         self.get_details(&entity)
@@ -369,8 +369,8 @@ impl GtsOps {
                 return GtsAddEntityResult {
                     ok: false,
                     id: String::new(),
-                    schema_id: None,
-                    is_schema: true,
+                    type_id: None,
+                    is_type_schema: true,
                     error: format!(
                         "Schema traits validation failed: {e}\n{}",
                         self.get_details(&entity)
@@ -384,8 +384,8 @@ impl GtsOps {
                 return GtsAddEntityResult {
                     ok: false,
                     id: String::new(),
-                    schema_id: None,
-                    is_schema: false,
+                    type_id: None,
+                    is_type_schema: false,
                     error: format!(
                         "Instance validation failed: {e}\n{}",
                         self.get_details(&entity)
@@ -396,8 +396,8 @@ impl GtsOps {
                 return GtsAddEntityResult {
                     ok: false,
                     id: String::new(),
-                    schema_id: None,
-                    is_schema: false,
+                    type_id: None,
+                    is_type_schema: false,
                     error: format!(
                         "Instance validation failed: {e}\n{}",
                         self.get_details(&entity)
@@ -411,8 +411,8 @@ impl GtsOps {
         GtsAddEntityResult {
             ok: true,
             id: entity_id,
-            schema_id: entity.schema_id,
-            is_schema: entity.is_schema,
+            type_id: entity.schema_id,
+            is_type_schema: entity.is_schema,
             error: String::new(),
         }
     }
@@ -466,14 +466,14 @@ impl GtsOps {
                     id: gts_id.to_owned(),
                     valid: true,
                     error: String::new(),
-                    is_schema: Some(w.id.ends_with('~')),
+                    is_type: Some(w.id.ends_with('~')),
                     is_wildcard: true,
                 },
                 Err(e) => GtsIdValidationResult {
                     id: gts_id.to_owned(),
                     valid: false,
                     error: format!("Unable to validate GTS ID '{gts_id}': {e}"),
-                    is_schema: None,
+                    is_type: None,
                     is_wildcard: true,
                 },
             }
@@ -483,14 +483,14 @@ impl GtsOps {
                     id: gts_id.to_owned(),
                     valid: true,
                     error: String::new(),
-                    is_schema: Some(id.is_type()),
+                    is_type: Some(id.is_type()),
                     is_wildcard: false,
                 },
                 Err(e) => GtsIdValidationResult {
                     id: gts_id.to_owned(),
                     valid: false,
                     error: format!("Unable to validate GTS ID '{gts_id}': {e}"),
-                    is_schema: None,
+                    is_type: None,
                     is_wildcard: false,
                 },
             }
@@ -515,7 +515,7 @@ impl GtsOps {
                         ok: true,
                         segments,
                         error: String::new(),
-                        is_schema: Some(w.id.ends_with('~')),
+                        is_type: Some(w.id.ends_with('~')),
                         is_wildcard: true,
                     }
                 }
@@ -524,7 +524,7 @@ impl GtsOps {
                     ok: false,
                     segments: Vec::new(),
                     error: e.to_string(),
-                    is_schema: None,
+                    is_type: None,
                     is_wildcard: true,
                 },
             }
@@ -542,7 +542,7 @@ impl GtsOps {
                         ok: true,
                         segments,
                         error: String::new(),
-                        is_schema: Some(id.is_type()),
+                        is_type: Some(id.is_type()),
                         is_wildcard: false,
                     }
                 }
@@ -551,7 +551,7 @@ impl GtsOps {
                     ok: false,
                     segments: Vec::new(),
                     error: e.to_string(),
-                    is_schema: None,
+                    is_type: None,
                     is_wildcard: false,
                 },
             }
@@ -812,10 +812,10 @@ impl GtsOps {
 
         GtsExtractIdResult {
             id: entity.effective_id().unwrap_or_default(),
-            schema_id: entity.schema_id,
+            type_id: entity.schema_id,
             selected_entity_field: entity.selected_entity_field,
-            selected_schema_id_field: entity.selected_schema_id_field,
-            is_schema: entity.is_schema,
+            selected_type_id_field: entity.selected_schema_id_field,
+            is_type_schema: entity.is_schema,
         }
     }
 
@@ -827,16 +827,16 @@ impl GtsOps {
                     .gts_id
                     .as_ref()
                     .map_or_else(|| gts_id.to_owned(), |g| g.id.clone()),
-                schema_id: entity.schema_id.clone(),
-                is_schema: entity.is_schema,
+                type_id: entity.schema_id.clone(),
+                is_type_schema: entity.is_schema,
                 content: Some(entity.content.clone()),
                 error: String::new(),
             },
             None => GtsGetEntityResult {
                 ok: false,
                 id: String::new(),
-                schema_id: None,
-                is_schema: false,
+                type_id: None,
+                is_type_schema: false,
                 content: None,
                 error: format!("Entity '{gts_id}' not found"),
             },
@@ -853,8 +853,8 @@ impl GtsOps {
             .take(limit)
             .map(|(entity_id, entity)| GtsEntityInfo {
                 id: entity_id.clone(),
-                schema_id: entity.schema_id.clone(),
-                is_schema: entity.is_schema,
+                type_id: entity.schema_id.clone(),
+                is_type_schema: entity.is_schema,
             })
             .collect();
 
@@ -953,7 +953,7 @@ mod tests {
 
         let result = ops.extract_id(&content);
         assert_eq!(
-            result.schema_id,
+            result.type_id,
             Some("gts.vendor.package.namespace.type.v1.0~".to_owned())
         );
     }
@@ -1122,7 +1122,7 @@ mod tests {
 
         // calc_json_schema_id should be triggered and extract schema_id from type field
         assert_eq!(
-            result.schema_id,
+            result.type_id,
             Some("gts.vendor.package.namespace.type.v1.0~".to_owned())
         );
         // Verify the method executed successfully
@@ -1147,15 +1147,15 @@ mod tests {
         );
         // The schema_id should be extracted from the chain (everything up to and including last ~)
         assert_eq!(
-            result.schema_id,
+            result.type_id,
             Some("gts.x.test2.events.type.v1~".to_owned())
         );
         // It's an instance (no $schema field)
-        assert!(!result.is_schema);
+        assert!(!result.is_type_schema);
         // The entity field should be "id"
         assert_eq!(result.selected_entity_field, Some("id".to_owned()));
         // The schema_id was extracted from the id field, so selected_schema_id_field should also be "id"
-        assert_eq!(result.selected_schema_id_field, Some("id".to_owned()));
+        assert_eq!(result.selected_type_id_field, Some("id".to_owned()));
     }
 
     #[test]
@@ -1174,13 +1174,13 @@ mod tests {
         // The id should be the GTS ID
         assert_eq!(result.id, "gts.v123.p456.n789.t000.v999.888~");
         // No $schema field, so it's not a schema
-        assert!(!result.is_schema);
+        assert!(!result.is_type_schema);
         // schema_id should be None - we can't determine the parent schema for a single-segment ID
-        assert_eq!(result.schema_id, None);
+        assert_eq!(result.type_id, None);
         // The entity field should be "id"
         assert_eq!(result.selected_entity_field, Some("id".to_owned()));
         // No schema_id was extracted, so selected_schema_id_field should be None
-        assert_eq!(result.selected_schema_id_field, None);
+        assert_eq!(result.selected_type_id_field, None);
     }
 
     #[test]
@@ -1198,9 +1198,10 @@ mod tests {
 
         // When entity ID ends with ~, it IS the schema
         assert_eq!(result.id, "gts.vendor.package.namespace.type.v1.0~");
-        assert!(result.is_schema);
-        // Verify schema_id is set (could be from $schema or id field)
-        assert!(result.schema_id.is_some());
+        assert!(result.is_type_schema);
+        // Per spec, a base schema (single-segment $id, $schema is a JSON Schema
+        // dialect URL) has no GTS parent type — type_id MUST be null.
+        assert!(result.type_id.is_none());
     }
 
     #[test]
@@ -1265,7 +1266,7 @@ mod tests {
             id: "gts.vendor.package.namespace.type.v1.0".to_owned(),
             valid: true,
             error: String::new(),
-            is_schema: Some(false),
+            is_type: Some(false),
             is_wildcard: false,
         };
 
@@ -1275,7 +1276,7 @@ mod tests {
             "gts.vendor.package.namespace.type.v1.0"
         );
         assert!(json.get("valid").expect("test").as_bool().expect("test"));
-        assert!(json.get("is_schema").expect("test").as_bool().is_some());
+        assert!(json.get("is_type").expect("test").as_bool().is_some());
         assert!(
             !json
                 .get("is_wildcard")
@@ -1335,7 +1336,7 @@ mod tests {
             ok: true,
             segments: vec![],
             error: String::new(),
-            is_schema: Some(false),
+            is_type: Some(false),
             is_wildcard: false,
         };
 
@@ -1431,8 +1432,8 @@ mod tests {
 
         let info = GtsEntityInfo {
             id: "gts.vendor.package.namespace.type.v1.0".to_owned(),
-            schema_id: Some("gts.vendor.package.namespace.type.v1.0~".to_owned()),
-            is_schema: false,
+            type_id: Some("gts.vendor.package.namespace.type.v1.0~".to_owned()),
+            is_type_schema: false,
         };
 
         let json = to_json_obj(&info);
@@ -1442,12 +1443,12 @@ mod tests {
         );
         assert!(
             !json
-                .get("is_schema")
+                .get("is_type_schema")
                 .expect("test")
                 .as_bool()
                 .expect("test")
         );
-        assert!(json.contains_key("schema_id"));
+        assert!(json.contains_key("type_id"));
     }
 
     #[test]
@@ -1457,13 +1458,13 @@ mod tests {
         let entities = vec![
             GtsEntityInfo {
                 id: "gts.test.id1.v1.0".to_owned(),
-                schema_id: None,
-                is_schema: false,
+                type_id: None,
+                is_type_schema: false,
             },
             GtsEntityInfo {
                 id: "gts.test.id2.v1.0".to_owned(),
-                schema_id: None,
-                is_schema: false,
+                type_id: None,
+                is_type_schema: false,
             },
         ];
 
@@ -1485,8 +1486,8 @@ mod tests {
         let result = GtsAddEntityResult {
             ok: true,
             id: "gts.vendor.package.namespace.type.v1.0".to_owned(),
-            schema_id: None,
-            is_schema: false,
+            type_id: None,
+            is_type_schema: false,
             error: String::new(),
         };
 
@@ -1506,15 +1507,15 @@ mod tests {
             GtsAddEntityResult {
                 ok: true,
                 id: "gts.test.id1.v1.0".to_owned(),
-                schema_id: None,
-                is_schema: false,
+                type_id: None,
+                is_type_schema: false,
                 error: String::new(),
             },
             GtsAddEntityResult {
                 ok: true,
                 id: "gts.test.id2.v1.0".to_owned(),
-                schema_id: None,
-                is_schema: false,
+                type_id: None,
+                is_type_schema: false,
                 error: String::new(),
             },
         ];
@@ -1550,10 +1551,10 @@ mod tests {
 
         let result = GtsExtractIdResult {
             id: "gts.vendor.package.namespace.type.v1.0".to_owned(),
-            schema_id: Some("gts.vendor.package.namespace.type.v1.0~".to_owned()),
+            type_id: Some("gts.vendor.package.namespace.type.v1.0~".to_owned()),
             selected_entity_field: Some("id".to_owned()),
-            selected_schema_id_field: Some("type".to_owned()),
-            is_schema: false,
+            selected_type_id_field: Some("type".to_owned()),
+            is_type_schema: false,
         };
 
         let json = to_json_obj(&result);
@@ -1561,12 +1562,12 @@ mod tests {
             json.get("id").expect("test").as_str().expect("test"),
             "gts.vendor.package.namespace.type.v1.0"
         );
-        assert!(json.contains_key("schema_id"));
+        assert!(json.contains_key("type_id"));
         assert!(json.contains_key("selected_entity_field"));
-        assert!(json.contains_key("selected_schema_id_field"));
+        assert!(json.contains_key("selected_type_id_field"));
         assert!(
             !json
-                .get("is_schema")
+                .get("is_type_schema")
                 .expect("test")
                 .as_bool()
                 .expect("test")
@@ -3001,7 +3002,7 @@ mod tests {
             result.id,
             "gts.vendor.package.namespace.type.v1.0~instance.v1.0"
         );
-        assert!(!result.is_schema);
+        assert!(!result.is_type_schema);
     }
 
     #[test]
@@ -3016,9 +3017,9 @@ mod tests {
         let result = ops.add_entity(&content, false);
         assert!(result.ok, "Anonymous instance should succeed");
         assert_eq!(result.id, "7a1d2f34-5678-49ab-9012-abcdef123456");
-        assert!(!result.is_schema);
+        assert!(!result.is_type_schema);
         assert_eq!(
-            result.schema_id,
+            result.type_id,
             Some("gts.vendor.package.namespace.type.v1.0~".to_owned())
         );
     }
@@ -3053,7 +3054,7 @@ mod tests {
         let result = ops.add_entity(&content, false);
         assert!(result.ok, "Schema with valid $id should succeed");
         assert_eq!(result.id, "gts.vendor.package.namespace.type.v1.0~");
-        assert!(result.is_schema);
+        assert!(result.is_type_schema);
     }
 
     #[test]
@@ -3069,14 +3070,14 @@ mod tests {
             result.id,
             "gts.x.core.events.type.v1~abc.app._.custom_event.v1.2"
         );
-        assert!(!result.is_schema);
+        assert!(!result.is_type_schema);
         assert_eq!(
-            result.schema_id,
+            result.type_id,
             Some("gts.x.core.events.type.v1~".to_owned())
         );
         assert_eq!(result.selected_entity_field, Some("id".to_owned()));
         assert_eq!(
-            result.selected_schema_id_field,
+            result.selected_type_id_field,
             Some("id".to_owned()),
             "selected_schema_id_field should be set when schema_id is derived from id"
         );
@@ -3093,13 +3094,13 @@ mod tests {
 
         let result = ops.extract_id(&content);
         assert_eq!(result.id, "7a1d2f34-5678-49ab-9012-abcdef123456");
-        assert!(!result.is_schema);
+        assert!(!result.is_type_schema);
         assert_eq!(
-            result.schema_id,
+            result.type_id,
             Some("gts.x.core.events.type.v1~x.commerce.orders.order_placed.v1.0~".to_owned())
         );
         assert_eq!(result.selected_entity_field, Some("id".to_owned()));
-        assert_eq!(result.selected_schema_id_field, Some("type".to_owned()));
+        assert_eq!(result.selected_type_id_field, Some("type".to_owned()));
     }
 
     #[test]
@@ -3113,7 +3114,7 @@ mod tests {
 
         let result = ops.extract_id(&content);
         assert_eq!(result.id, "gts.vendor.package.namespace.type.v1.0~");
-        assert!(result.is_schema);
+        assert!(result.is_type_schema);
     }
 
     #[test]
@@ -3127,7 +3128,7 @@ mod tests {
 
         let result = ops.extract_id(&content);
         assert_eq!(result.id, "", "Should return empty string when no id found");
-        assert!(!result.is_schema);
+        assert!(!result.is_type_schema);
     }
 
     #[test]
@@ -3197,7 +3198,7 @@ mod tests {
             result.error
         );
         assert_eq!(result.id, "gts.x.test6.valid_id.with_uri.v1~");
-        assert!(result.is_schema);
+        assert!(result.is_type_schema);
     }
 
     // =============================================================================
@@ -3451,7 +3452,7 @@ mod tests {
         let result = GtsOps::validate_id("gts.vendor.package.namespace.*");
         assert!(result.valid, "Wildcard at end should be valid");
         assert!(result.is_wildcard);
-        assert_eq!(result.is_schema, Some(false));
+        assert_eq!(result.is_type, Some(false));
     }
 
     #[test]
@@ -3462,7 +3463,7 @@ mod tests {
         assert!(result.valid, "Wildcard at end of schema should be valid");
         assert!(result.is_wildcard);
         assert_eq!(
-            result.is_schema,
+            result.is_type,
             Some(false),
             "Pattern matches instances, not schemas"
         );
@@ -3495,7 +3496,7 @@ mod tests {
         assert!(result.ok, "Parsing valid wildcard should succeed");
         assert!(result.is_wildcard);
         assert!(!result.segments.is_empty(), "Should have parsed segments");
-        assert_eq!(result.is_schema, Some(false));
+        assert_eq!(result.is_type, Some(false));
     }
 
     #[test]
@@ -3507,7 +3508,7 @@ mod tests {
         assert!(result.is_wildcard);
         assert!(!result.segments.is_empty(), "Should have parsed segments");
         assert_eq!(
-            result.is_schema,
+            result.is_type,
             Some(false),
             "Pattern matches instances, not schemas"
         );
@@ -3614,6 +3615,6 @@ mod tests {
         assert!(result.error.is_empty());
         assert!(result.content.is_some(), "Content should be present");
         assert_eq!(result.id, "gts.test.get.entity.success.v1~");
-        assert!(result.is_schema);
+        assert!(result.is_type_schema);
     }
 }
