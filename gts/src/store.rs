@@ -274,8 +274,8 @@ impl GtsStore {
                         "#/$defs/GtsInstanceId" => {
                             return crate::GtsInstanceId::json_schema_value();
                         }
-                        "#/$defs/GtsSchemaId" => {
-                            return crate::GtsSchemaId::json_schema_value();
+                        "#/$defs/GtsTypeId" | "#/$defs/GtsSchemaId" => {
+                            return crate::GtsTypeId::json_schema_value();
                         }
                         s if s.starts_with("#/") => {
                             // Other internal references - keep as-is
@@ -341,7 +341,7 @@ impl GtsStore {
                         }
 
                         // Remove $id and $schema from resolved content to avoid URL resolution issues
-                        // Note: $defs for GtsInstanceId/GtsSchemaId are inlined during resolution (see match above)
+                        // Note: $defs for GtsInstanceId/GtsTypeId are inlined during resolution (see match above)
                         if let Value::Object(ref mut resolved_map) = resolved {
                             resolved_map.remove("$id");
                             resolved_map.remove("$schema");
@@ -1053,29 +1053,29 @@ impl GtsStore {
             .ok_or_else(|| StoreError::ObjectNotFound(instance_id.to_owned()))?
             .clone();
 
-        let schema_id = obj
-            .schema_id
+        let type_id = obj
+            .type_id
             .as_ref()
             .ok_or_else(|| StoreError::SchemaForInstanceNotFound(lookup_id.clone()))?
             .clone();
 
-        let schema = self.get_schema_content(&schema_id)?;
+        let schema = self.get_schema_content(&type_id)?;
 
         // Check x-gts-abstract: abstract types cannot have direct instances.
         if schema.get(crate::schema_modifiers::X_GTS_ABSTRACT) == Some(&Value::Bool(true)) {
             return Err(StoreError::ValidationError(format!(
-                "type '{schema_id}' is abstract and cannot have direct instances"
+                "type '{type_id}' is abstract and cannot have direct instances"
             )));
         }
 
         tracing::info!(
             "Validating instance {} against schema {}",
             instance_id,
-            schema_id
+            type_id
         );
 
         // Resolve internal #/ references (like #/$defs/GtsInstanceId) by inlining them
-        // This handles the compile-time inlining of GtsInstanceId and GtsSchemaId
+        // This handles the compile-time inlining of GtsInstanceId and GtsTypeId
         let schema_with_internal_refs_resolved = self.resolve_schema_refs(&schema);
 
         // Remove x-gts-ref fields before jsonschema validation.
@@ -1147,7 +1147,7 @@ impl GtsStore {
     pub fn cast(
         &mut self,
         from_id: &str,
-        target_schema_id: &str,
+        target_type_id: &str,
     ) -> Result<GtsEntityCastResult, StoreError> {
         let from_entity = self
             .get(from_id)
@@ -1159,12 +1159,12 @@ impl GtsStore {
         }
 
         let to_schema = self
-            .get(target_schema_id)
-            .ok_or_else(|| StoreError::ObjectNotFound(target_schema_id.to_owned()))?
+            .get(target_type_id)
+            .ok_or_else(|| StoreError::ObjectNotFound(target_type_id.to_owned()))?
             .clone();
 
         // Get the source schema
-        let (from_schema, _from_schema_id) = if from_entity.is_schema {
+        let (from_schema, _from_type_id) = if from_entity.is_schema {
             let id = from_entity
                 .gts_id
                 .as_ref()
@@ -1173,15 +1173,15 @@ impl GtsStore {
                 .clone();
             (from_entity.clone(), id)
         } else {
-            let schema_id = from_entity
-                .schema_id
+            let type_id = from_entity
+                .type_id
                 .as_ref()
                 .ok_or_else(|| StoreError::SchemaForInstanceNotFound(from_id.to_owned()))?;
             let schema = self
-                .get(schema_id)
-                .ok_or_else(|| StoreError::ObjectNotFound(schema_id.clone()))?
+                .get(type_id)
+                .ok_or_else(|| StoreError::ObjectNotFound(type_id.clone()))?
                 .clone();
-            (schema, schema_id.clone())
+            (schema, type_id.clone())
         };
 
         // Create a resolver to handle $ref in schemas
@@ -1195,18 +1195,18 @@ impl GtsStore {
 
     pub fn is_minor_compatible(
         &mut self,
-        old_schema_id: &str,
-        new_schema_id: &str,
+        old_type_id: &str,
+        new_type_id: &str,
     ) -> GtsEntityCastResult {
-        let old_entity = self.get(old_schema_id).cloned();
-        let new_entity = self.get(new_schema_id).cloned();
+        let old_entity = self.get(old_type_id).cloned();
+        let new_entity = self.get(new_type_id).cloned();
 
         let (Some(old_ent), Some(new_ent)) = (old_entity, new_entity) else {
             return GtsEntityCastResult {
-                from_id: old_schema_id.to_owned(),
-                to_id: new_schema_id.to_owned(),
-                old: old_schema_id.to_owned(),
-                new: new_schema_id.to_owned(),
+                from_id: old_type_id.to_owned(),
+                to_id: new_type_id.to_owned(),
+                old: old_type_id.to_owned(),
+                new: new_type_id.to_owned(),
                 direction: "unknown".to_owned(),
                 added_properties: Vec::new(),
                 removed_properties: Vec::new(),
@@ -1232,13 +1232,13 @@ impl GtsStore {
             GtsEntityCastResult::check_forward_compatibility(old_schema, new_schema);
 
         // Determine direction
-        let direction = GtsEntityCastResult::infer_direction(old_schema_id, new_schema_id);
+        let direction = GtsEntityCastResult::infer_direction(old_type_id, new_type_id);
 
         GtsEntityCastResult {
-            from_id: old_schema_id.to_owned(),
-            to_id: new_schema_id.to_owned(),
-            old: old_schema_id.to_owned(),
-            new: new_schema_id.to_owned(),
+            from_id: old_type_id.to_owned(),
+            to_id: new_type_id.to_owned(),
+            old: old_type_id.to_owned(),
+            new: new_type_id.to_owned(),
             direction,
             added_properties: Vec::new(),
             removed_properties: Vec::new(),
@@ -1299,14 +1299,14 @@ impl GtsStore {
                 ret.insert("refs".to_owned(), Value::Object(refs));
             }
 
-            if let Some(ref schema_id) = entity.schema_id {
-                if !schema_id.starts_with("http://json-schema.org")
-                    && !schema_id.starts_with("https://json-schema.org")
+            if let Some(ref type_id) = entity.type_id {
+                if !type_id.starts_with("http://json-schema.org")
+                    && !type_id.starts_with("https://json-schema.org")
                 {
-                    let schema_id_clone = schema_id.clone();
+                    let type_id_clone = type_id.clone();
                     ret.insert(
-                        "schema_id".to_owned(),
-                        self.gts2node(&schema_id_clone, seen_gts_ids),
+                        "type_id".to_owned(),
+                        self.gts2node(&type_id_clone, seen_gts_ids),
                     );
                 }
             } else {

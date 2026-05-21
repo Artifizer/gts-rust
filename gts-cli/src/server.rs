@@ -65,14 +65,14 @@ impl GtsHttpServer {
             .route("/entities", get(get_entities).post(add_entity))
             .route("/entities/{gts_id}", get(get_entity))
             .route("/entities/bulk", post(add_entities))
-            .route("/schemas", post(add_schema))
+            .route("/type-schemas", post(add_schema))
             .route("/validate-id", get(validate_id))
             .route("/extract-id", post(extract_id))
             .route("/parse-id", get(parse_id))
             .route("/match-id-pattern", get(match_id_pattern))
             .route("/uuid", get(id_to_uuid))
             .route("/validate-instance", post(validate_instance))
-            .route("/validate-schema", post(validate_schema))
+            .route("/validate-type-schema", post(validate_schema))
             .route("/validate-entity", post(validate_entity))
             .route("/resolve-relationships", get(schema_graph))
             .route("/compatibility", get(compatibility))
@@ -131,8 +131,8 @@ struct MatchIdQuery {
 
 #[derive(Deserialize)]
 struct CompatibilityQuery {
-    old_schema_id: String,
-    new_schema_id: String,
+    old_type_id: String,
+    new_type_id: String,
 }
 
 #[derive(Deserialize)]
@@ -166,14 +166,13 @@ fn default_limit() -> usize {
 #[derive(Deserialize)]
 struct SchemaRegister {
     type_id: String,
-    #[serde(rename = "schema")]
-    schema_content: Value,
+    type_schema: Value,
 }
 
 #[derive(Deserialize, serde::Serialize)]
 struct CastRequest {
     instance_id: String,
-    to_schema_id: String,
+    to_type_id: String,
 }
 
 #[derive(Deserialize, serde::Serialize)]
@@ -182,8 +181,8 @@ struct ValidateInstanceRequest {
 }
 
 #[derive(Deserialize, serde::Serialize)]
-struct ValidateSchemaRequest {
-    schema_id: String,
+struct ValidateTypeSchemaRequest {
+    type_id: String,
 }
 
 #[derive(Deserialize, serde::Serialize)]
@@ -266,7 +265,7 @@ async fn add_schema(
         Ok(guard) => guard,
         Err(response) => return response.into_response(),
     };
-    let result = ops.add_schema(body.type_id, &body.schema_content);
+    let result = ops.add_schema(body.type_id, &body.type_schema);
     Json(result).into_response()
 }
 
@@ -341,13 +340,13 @@ async fn validate_instance(
 
 async fn validate_schema(
     State(state): State<AppState>,
-    Json(body): Json<ValidateSchemaRequest>,
+    Json(body): Json<ValidateTypeSchemaRequest>,
 ) -> impl IntoResponse {
     let mut ops = match lock_ops(&state.ops) {
         Ok(guard) => guard,
         Err(response) => return response.into_response(),
     };
-    let result = ops.validate_schema(&body.schema_id);
+    let result = ops.validate_schema(&body.type_id);
     Json(result).into_response()
 }
 
@@ -383,7 +382,7 @@ async fn compatibility(
         Ok(guard) => guard,
         Err(response) => return response.into_response(),
     };
-    let result = ops.compatibility(&params.old_schema_id, &params.new_schema_id);
+    let result = ops.compatibility(&params.old_type_id, &params.new_type_id);
     Json(result).into_response()
 }
 
@@ -392,7 +391,7 @@ async fn cast(State(state): State<AppState>, Json(body): Json<CastRequest>) -> i
         Ok(guard) => guard,
         Err(response) => return response.into_response(),
     };
-    let result = ops.cast(&body.instance_id, &body.to_schema_id);
+    let result = ops.cast(&body.instance_id, &body.to_type_id);
     Json(result).into_response()
 }
 

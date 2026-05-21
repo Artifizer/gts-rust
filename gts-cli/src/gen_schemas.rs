@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use gts::{GtsInstanceId, GtsSchemaId};
+use gts::{GtsInstanceId, GtsTypeId};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
@@ -31,7 +31,7 @@ impl std::fmt::Display for SkipReason {
 #[derive(Debug, Clone)]
 struct MacroAttrs {
     dir_path: String,
-    schema_id: String,
+    type_id: String,
     description: Option<String>,
     properties: Option<String>,
     base: BaseAttr,
@@ -221,7 +221,8 @@ fn has_ignore_directive(content: &str) -> bool {
 fn parse_macro_attrs(attr_body: &str) -> Option<MacroAttrs> {
     // Patterns for extracting individual attributes
     let dir_path_re = Regex::new(r#"dir_path\s*=\s*"([^"]+)""#).ok()?;
-    let schema_id_re = Regex::new(r#"schema_id\s*=\s*"([^"]+)""#).ok()?;
+    let type_id_re = Regex::new(r#"\btype_id\s*=\s*"([^"]+)""#).ok()?;
+    let schema_id_re = Regex::new(r#"\bschema_id\s*=\s*"([^"]+)""#).ok()?;
     let description_re = Regex::new(r#"description\s*=\s*"([^"]+)""#).ok()?;
     let properties_re = Regex::new(r#"properties\s*=\s*"([^"]+)""#).ok()?;
     let base_true_re = Regex::new(r"\bbase\s*=\s*true\b").ok()?;
@@ -229,11 +230,15 @@ fn parse_macro_attrs(attr_body: &str) -> Option<MacroAttrs> {
 
     // Extract required fields
     let dir_path = dir_path_re.captures(attr_body)?.get(1)?.as_str().to_owned();
-    let schema_id = schema_id_re
-        .captures(attr_body)?
-        .get(1)?
-        .as_str()
-        .to_owned();
+    // Accept canonical `type_id` first, fall back to deprecated `schema_id` alias.
+    let type_id = type_id_re
+        .captures(attr_body)
+        .and_then(|c| c.get(1).map(|m| m.as_str().to_owned()))
+        .or_else(|| {
+            schema_id_re
+                .captures(attr_body)
+                .and_then(|c| c.get(1).map(|m| m.as_str().to_owned()))
+        })?;
 
     // Extract optional fields
     let description = description_re
@@ -255,7 +260,7 @@ fn parse_macro_attrs(attr_body: &str) -> Option<MacroAttrs> {
 
     Some(MacroAttrs {
         dir_path,
-        schema_id,
+        type_id,
         description,
         properties,
         base,
@@ -294,7 +299,7 @@ fn extract_and_generate_schemas(
 
         // Convert schema_id to filename-safe format
         // e.g., "gts.x.core.events.type.v1~" -> "gts.x.core.events.type.v1~"
-        let schema_file_rel = format!("{}/{}.schema.json", attrs.dir_path, attrs.schema_id);
+        let schema_file_rel = format!("{}/{}.schema.json", attrs.dir_path, attrs.type_id);
 
         // Determine output path
         let output_path = if let Some(output_dir) = output_override {
@@ -344,7 +349,7 @@ fn extract_and_generate_schemas(
 
         // Build JSON schema
         let schema = build_json_schema(
-            &attrs.schema_id,
+            &attrs.type_id,
             struct_name,
             attrs.description.as_deref(),
             attrs.properties.as_deref(),
@@ -361,7 +366,7 @@ fn extract_and_generate_schemas(
         fs::write(&output_path, serde_json::to_string_pretty(&schema)?)?;
 
         // Add to results (schema_id, file_path)
-        results.push((attrs.schema_id, output_path.display().to_string()));
+        results.push((attrs.type_id, output_path.display().to_string()));
     }
 
     Ok(results)
@@ -369,7 +374,7 @@ fn extract_and_generate_schemas(
 
 /// Build a JSON Schema object from parsed metadata
 fn build_json_schema(
-    schema_id: &str,
+    type_id: &str,
     struct_name: &str,
     description: Option<&str>,
     properties_list: Option<&str>,
@@ -410,7 +415,7 @@ fn build_json_schema(
         BaseAttr::IsBase => {
             // Base type - simple flat schema
             let mut s = json!({
-                "$id": format!("gts://{schema_id}"),
+                "$id": format!("gts://{type_id}"),
                 "$schema": "http://json-schema.org/draft-07/schema#",
                 "title": struct_name,
                 "type": "object",
@@ -430,8 +435,8 @@ fn build_json_schema(
         }
         BaseAttr::Parent(parent_name) => {
             // Child type - use allOf with $ref to parent
-            // The parent's schema_id is derived from this schema's ID by removing the last segment
-            let parent_schema_id = derive_parent_schema_id(schema_id);
+            // The parent's type_id is derived from this schema's ID by removing the last segment
+            let parent_type_id = derive_parent_type_id(type_id);
 
             let mut own_properties = json!({
                 "properties": schema_properties
@@ -442,12 +447,12 @@ fn build_json_schema(
             }
 
             let mut s = json!({
-                "$id": format!("gts://{schema_id}"),
+                "$id": format!("gts://{type_id}"),
                 "$schema": "http://json-schema.org/draft-07/schema#",
                 "title": format!("{struct_name} (extends {parent_name})"),
                 "type": "object",
                 "allOf": [
-                    { "$ref": format!("gts://{parent_schema_id}") },
+                    { "$ref": format!("gts://{parent_type_id}") },
                     own_properties
                 ]
             });
@@ -461,18 +466,18 @@ fn build_json_schema(
     }
 }
 
-/// Derive parent schema ID from child schema ID
+/// Derive parent type ID from child type ID
 /// e.g., "gts.x.core.events.type.v1~x.core.audit.event.v1~" -> "gts.x.core.events.type.v1~"
-fn derive_parent_schema_id(schema_id: &str) -> String {
+fn derive_parent_type_id(type_id: &str) -> String {
     // Remove trailing ~ if present for processing
-    let s = schema_id.trim_end_matches('~');
+    let s = type_id.trim_end_matches('~');
 
     // Find the last ~ and take everything before it, then add ~ back
     if let Some(pos) = s.rfind('~') {
         format!("{}~", &s[..pos])
     } else {
         // No parent segment found, this shouldn't happen for child types
-        schema_id.to_owned()
+        type_id.to_owned()
     }
 }
 
@@ -523,8 +528,8 @@ fn rust_type_to_json_schema(rust_type: &str) -> (bool, serde_json::Value) {
         }
         // GtsInstanceId - use the canonical schema from the gts crate
         "GtsInstanceId" => GtsInstanceId::json_schema_value(),
-        // GtsSchemaId - use the canonical schema from the gts crate
-        "GtsSchemaId" => GtsSchemaId::json_schema_value(),
+        // GtsTypeId (or its deprecated alias GtsSchemaId) — use the canonical schema from the gts crate
+        "GtsTypeId" | "GtsSchemaId" => GtsTypeId::json_schema_value(),
         // Generic type parameter (e.g., P, T, etc.) - treat as object
         t if t.len() <= 2 && t.chars().all(|c| c.is_ascii_uppercase()) => {
             json!({ "type": "object" })
@@ -609,7 +614,7 @@ mod tests {
 
         let attrs = parse_macro_attrs(attr_body).unwrap();
         assert_eq!(attrs.dir_path, "schemas");
-        assert_eq!(attrs.schema_id, "gts.x.core.events.type.v1~");
+        assert_eq!(attrs.type_id, "gts.x.core.events.type.v1~");
         assert_eq!(attrs.description.as_deref(), Some("Base event type"));
         assert!(matches!(attrs.base, BaseAttr::IsBase));
     }
@@ -625,20 +630,20 @@ mod tests {
         let attrs = parse_macro_attrs(attr_body).unwrap();
         assert_eq!(attrs.dir_path, "schemas");
         assert_eq!(
-            attrs.schema_id,
+            attrs.type_id,
             "gts.x.core.events.type.v1~x.core.audit.event.v1~"
         );
         assert!(matches!(attrs.base, BaseAttr::Parent(ref p) if p == "BaseEventV1"));
     }
 
     #[test]
-    fn test_derive_parent_schema_id() {
+    fn test_derive_parent_type_id() {
         assert_eq!(
-            derive_parent_schema_id("gts.x.core.events.type.v1~x.core.audit.event.v1~"),
+            derive_parent_type_id("gts.x.core.events.type.v1~x.core.audit.event.v1~"),
             "gts.x.core.events.type.v1~"
         );
         assert_eq!(
-            derive_parent_schema_id(
+            derive_parent_type_id(
                 "gts.x.core.events.type.v1~x.core.audit.event.v1~x.marketplace.orders.purchase.v1~"
             ),
             "gts.x.core.events.type.v1~x.core.audit.event.v1~"
@@ -783,7 +788,7 @@ mod tests {
         "#;
 
         let attrs = parse_macro_attrs(attr_body).unwrap();
-        assert_eq!(attrs.schema_id, "gts.x.custom.id.v1~");
+        assert_eq!(attrs.type_id, "gts.x.custom.id.v1~");
         assert_eq!(attrs.dir_path, "schemas");
         assert!(matches!(attrs.base, BaseAttr::IsBase));
         assert!(attrs.description.is_none());
@@ -1001,7 +1006,7 @@ pub struct ChildEvent {
         let attr1 = r#"dir_path = "schemas", base = true, schema_id = "gts.x.test.v1~""#;
         let result1 = parse_macro_attrs(attr1).unwrap();
         assert_eq!(result1.dir_path, "schemas");
-        assert_eq!(result1.schema_id, "gts.x.test.v1~");
+        assert_eq!(result1.type_id, "gts.x.test.v1~");
         assert!(matches!(result1.base, BaseAttr::IsBase));
 
         // With base parent

@@ -1,4 +1,4 @@
-use gts::gts::GtsSchemaId;
+use gts::gts::GtsTypeId;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
@@ -11,21 +11,21 @@ const SEPARATOR: &str =
 
 // Include test structs to access their generated constants
 mod test_structs {
-    use super::{Deserialize, GtsSchemaId, Serialize};
+    use super::{Deserialize, GtsTypeId, Serialize};
     use gts_macros::struct_to_gts_schema;
     use schemars::JsonSchema;
 
     #[struct_to_gts_schema(
         dir_path = "schemas",
         base = true,
-        schema_id = "gts.x.core.events.type.v1~",
+        type_id = "gts.x.core.events.type.v1~",
         description = "Base event type definition",
         properties = "event_type,id,tenant_id,sequence_id,payload"
     )]
     #[derive(Debug, Serialize, Deserialize, JsonSchema)]
     pub struct BaseEventV1<P> {
         #[serde(rename = "type")]
-        pub event_type: GtsSchemaId,
+        pub event_type: GtsTypeId,
         pub id: uuid::Uuid,
         pub tenant_id: uuid::Uuid,
         pub sequence_id: u64,
@@ -35,7 +35,7 @@ mod test_structs {
     #[struct_to_gts_schema(
         dir_path = "schemas",
         base = BaseEventV1,
-        schema_id = "gts.x.core.events.type.v1~x.core.audit.event.v1~",
+        type_id = "gts.x.core.events.type.v1~x.core.audit.event.v1~",
         description = "Audit event with user context",
         properties = "user_agent,user_id,ip_address,data"
     )]
@@ -50,7 +50,7 @@ mod test_structs {
     #[struct_to_gts_schema(
         dir_path = "schemas",
         base = AuditPayloadV1,
-        schema_id = "gts.x.core.events.type.v1~x.core.audit.event.v1~x.marketplace.orders.purchase.v1~",
+        type_id = "gts.x.core.events.type.v1~x.core.audit.event.v1~x.marketplace.orders.purchase.v1~",
         description = "Order placement audit event",
         properties = "order_id,product_id"
     )]
@@ -64,7 +64,7 @@ mod test_structs {
     #[struct_to_gts_schema(
         dir_path = "schemas",
         base = PlaceOrderDataV1,
-        schema_id = "gts.x.core.events.type.v1~x.core.audit.event.v1~x.marketplace.orders.purchase.v1~x.marketplace.order_purchase.payload.v1~",
+        type_id = "gts.x.core.events.type.v1~x.core.audit.event.v1~x.marketplace.orders.purchase.v1~x.marketplace.order_purchase.payload.v1~",
         description = "Order placement audit event",
         properties = "order_id"
     )]
@@ -118,7 +118,7 @@ fn create_sample_event() -> anyhow::Result<
     >,
 > {
     Ok(test_structs::BaseEventV1 {
-        event_type: test_structs::PlaceOrderDataPayloadV1::gts_schema_id().clone(),
+        event_type: test_structs::PlaceOrderDataPayloadV1::gts_type_id().clone(),
         id: uuid::Uuid::parse_str("d1b475cf-8155-45c3-ab75-b245bd38116b")?,
         tenant_id: uuid::Uuid::parse_str("0a0bd7c0-e8ef-4d7d-b841-645715e25d20")?,
         sequence_id: 42,
@@ -168,32 +168,28 @@ fn dump_to_directory(dir: &Path) -> anyhow::Result<()> {
     // otherwise every file ends up with `$id = gts://...type.v1~` and
     // imitates the base, breaking the file-name <-> document-id invariant.
     let schema1 = gts_schema_for!(test_structs::BaseEventV1<()>);
-    save_schema(dir, &schema1, test_structs::BaseEventV1::<()>::SCHEMA_ID)?;
+    save_schema(dir, &schema1, test_structs::BaseEventV1::<()>::TYPE_ID)?;
 
     let schema2 = gts_schema_for!(test_structs::AuditPayloadV1<()>);
-    save_schema(dir, &schema2, test_structs::AuditPayloadV1::<()>::SCHEMA_ID)?;
+    save_schema(dir, &schema2, test_structs::AuditPayloadV1::<()>::TYPE_ID)?;
 
     let schema3 = gts_schema_for!(test_structs::PlaceOrderDataV1<()>);
-    save_schema(
-        dir,
-        &schema3,
-        test_structs::PlaceOrderDataV1::<()>::SCHEMA_ID,
-    )?;
+    save_schema(dir, &schema3, test_structs::PlaceOrderDataV1::<()>::TYPE_ID)?;
 
     let schema4 = gts_schema_for!(test_structs::PlaceOrderDataPayloadV1);
     save_schema(
         dir,
         &schema4,
-        test_structs::PlaceOrderDataPayloadV1::SCHEMA_ID,
+        test_structs::PlaceOrderDataPayloadV1::TYPE_ID,
     )?;
 
     // Generate validate.sh script
     // The main schema is the innermost (most derived) schema
     // Referenced schemas are listed from most derived to base (excluding the main schema)
-    let schema1_id = test_structs::BaseEventV1::<()>::SCHEMA_ID;
-    let schema2_id = test_structs::AuditPayloadV1::<()>::SCHEMA_ID;
-    let schema3_id = test_structs::PlaceOrderDataV1::<()>::SCHEMA_ID;
-    let schema4_id = test_structs::PlaceOrderDataPayloadV1::SCHEMA_ID;
+    let schema1_id = test_structs::BaseEventV1::<()>::TYPE_ID;
+    let schema2_id = test_structs::AuditPayloadV1::<()>::TYPE_ID;
+    let schema3_id = test_structs::PlaceOrderDataV1::<()>::TYPE_ID;
+    let schema4_id = test_structs::PlaceOrderDataPayloadV1::TYPE_ID;
     let schema_ids = [schema4_id, schema3_id, schema2_id, schema1_id];
 
     let mut validate_script = String::from("#!/bin/bash\n\n");
@@ -472,10 +468,10 @@ mod tests {
         use gts::GtsSchema;
 
         // Verify schema IDs can be retrieved
-        let schema1_id = test_structs::BaseEventV1::<()>::SCHEMA_ID;
-        let schema2_id = test_structs::AuditPayloadV1::<()>::SCHEMA_ID;
-        let schema3_id = test_structs::PlaceOrderDataV1::<()>::SCHEMA_ID;
-        let schema4_id = test_structs::PlaceOrderDataPayloadV1::SCHEMA_ID;
+        let schema1_id = test_structs::BaseEventV1::<()>::TYPE_ID;
+        let schema2_id = test_structs::AuditPayloadV1::<()>::TYPE_ID;
+        let schema3_id = test_structs::PlaceOrderDataV1::<()>::TYPE_ID;
+        let schema4_id = test_structs::PlaceOrderDataPayloadV1::TYPE_ID;
 
         // All should be non-empty
         assert!(!schema1_id.is_empty());
